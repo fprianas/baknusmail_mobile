@@ -150,6 +150,49 @@ class StoryService {
     }
   }
 
+  /// Menyukai atau membatalkan suka pada story (Story Like Tracking)
+  Future<bool> toggleStoryLike({
+    required String storyId,
+    required String userEmail,
+    required String userName,
+    required String userTag,
+  }) async {
+    final cleanEmail = userEmail.toLowerCase().trim();
+    if (storyId.isEmpty || cleanEmail.isEmpty) return false;
+
+    try {
+      final docRef = _firestore.collection(storiesCollection).doc(storyId);
+      final doc = await docRef.get();
+      if (!doc.exists) return false;
+
+      final story = StoryItem.fromFirestore(doc);
+      final isCurrentlyLiked = story.isLikedBy(cleanEmail);
+
+      final updatedLikes = story.likes.map((l) => l.toMap()).toList();
+
+      if (isCurrentlyLiked) {
+        updatedLikes.removeWhere((l) => l['email']?.toString().toLowerCase().trim() == cleanEmail);
+      } else {
+        final newLike = StoryLikeInfo(
+          email: cleanEmail,
+          name: userName.trim(),
+          tag: userTag.trim(),
+          likedAt: DateTime.now(),
+        );
+        updatedLikes.add(newLike.toMap());
+      }
+
+      await docRef.update({
+        'likes': updatedLikes,
+      });
+
+      return !isCurrentlyLiked;
+    } catch (e) {
+      debugPrint('Error toggling story like: $e');
+      return false;
+    }
+  }
+
   /// Menghapus story (hanya pemilik story yang diizinkan)
   Future<bool> deleteStory(String storyId, String userEmail) async {
     final cleanEmail = userEmail.toLowerCase().trim();

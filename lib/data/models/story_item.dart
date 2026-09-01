@@ -36,6 +36,42 @@ class StoryViewerInfo {
       };
 }
 
+class StoryLikeInfo {
+  final String email;
+  final String name;
+  final String tag;
+  final DateTime likedAt;
+
+  StoryLikeInfo({
+    required this.email,
+    required this.name,
+    required this.tag,
+    required this.likedAt,
+  });
+
+  factory StoryLikeInfo.fromMap(Map<String, dynamic> map) {
+    DateTime parseDate(dynamic val) {
+      if (val is Timestamp) return val.toDate();
+      if (val is String) return DateTime.tryParse(val) ?? DateTime.now();
+      return DateTime.now();
+    }
+
+    return StoryLikeInfo(
+      email: map['email']?.toString() ?? '',
+      name: map['name']?.toString() ?? 'Pengguna',
+      tag: map['tag']?.toString() ?? 'Siswa',
+      likedAt: parseDate(map['likedAt']),
+    );
+  }
+
+  Map<String, dynamic> toMap() => {
+        'email': email,
+        'name': name,
+        'tag': tag,
+        'likedAt': Timestamp.fromDate(likedAt),
+      };
+}
+
 class StoryItem {
   final String id;
   final String userEmail;
@@ -46,6 +82,7 @@ class StoryItem {
   final DateTime createdAt;
   final DateTime expiresAt;
   final List<StoryViewerInfo> viewers;
+  final List<StoryLikeInfo> likes;
   final List<String> targetAudience;
   final String type; // 'image' atau 'text'
   final String bgColor; // Hex code warna background untuk status tulisan
@@ -64,6 +101,7 @@ class StoryItem {
     required this.createdAt,
     required this.expiresAt,
     this.viewers = const [],
+    this.likes = const [],
     this.targetAudience = const ['Semua'],
     this.type = 'image',
     this.bgColor = '#E11D48',
@@ -88,6 +126,11 @@ class StoryItem {
   bool isViewedBy(String email) {
     final clean = email.toLowerCase().trim();
     return viewers.any((v) => v.email.toLowerCase().trim() == clean);
+  }
+
+  bool isLikedBy(String email) {
+    final clean = email.toLowerCase().trim();
+    return likes.any((l) => l.email.toLowerCase().trim() == clean);
   }
 
   /// Mengecek apakah story ini dapat dilihat oleh pengguna tertentu berdasarkan email dan tag peran (Siswa/Guru/TU)
@@ -137,6 +180,19 @@ class StoryItem {
           .toList();
     }
 
+    final rawLikes = data['likes'];
+    List<StoryLikeInfo> likesList = [];
+    if (rawLikes is List) {
+      likesList = rawLikes
+          .map((m) {
+            if (m is Map<String, dynamic>) return StoryLikeInfo.fromMap(m);
+            if (m is Map) return StoryLikeInfo.fromMap(Map<String, dynamic>.from(m));
+            return null;
+          })
+          .whereType<StoryLikeInfo>()
+          .toList();
+    }
+
     final rawAudience = data['targetAudience'];
     List<String> audienceList = [];
     if (rawAudience is List) {
@@ -156,6 +212,7 @@ class StoryItem {
       createdAt: parseDate(data['createdAt'], now),
       expiresAt: parseDate(data['expiresAt'], now.add(const Duration(hours: 24))),
       viewers: viewersList,
+      likes: likesList,
       targetAudience: audienceList,
       type: data['type']?.toString() ?? 'image',
       bgColor: data['bgColor']?.toString() ?? '#E11D48',
@@ -175,6 +232,7 @@ class StoryItem {
         'createdAt': Timestamp.fromDate(createdAt),
         'expiresAt': Timestamp.fromDate(expiresAt),
         'viewers': viewers.map((v) => v.toMap()).toList(),
+        'likes': likes.map((l) => l.toMap()).toList(),
         'targetAudience': targetAudience,
         'type': type,
         'bgColor': bgColor,

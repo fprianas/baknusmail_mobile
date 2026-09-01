@@ -8,6 +8,7 @@ import '../../core/utils/user_tag_resolver.dart';
 import '../../data/models/story_item.dart';
 import '../../data/services/chat_service.dart';
 import '../../data/services/story_service.dart';
+import 'floating_hearts_overlay.dart';
 import 'user_avatar.dart';
 
 class StoryViewerDialog extends StatefulWidget {
@@ -40,6 +41,8 @@ class _StoryViewerDialogState extends State<StoryViewerDialog>
   final ChatService _chatService = ChatService();
   final TextEditingController _replyController = TextEditingController();
   final AudioPlayer _audioPlayer = AudioPlayer();
+  final GlobalKey<FloatingHeartsOverlayState> _floatingHeartsKey =
+      GlobalKey<FloatingHeartsOverlayState>();
 
   bool _isPaused = false;
   bool _isSendingReply = false;
@@ -96,6 +99,14 @@ class _StoryViewerDialogState extends State<StoryViewerDialog>
     _animController.duration = Duration(seconds: storyDurationSec);
 
     _playStoryAudio(story);
+
+    // Memicu animasi love melayang bertuliskan nama civitas penyuka story
+    if (story.likes.isNotEmpty) {
+      final likerNames = story.likes.map((l) => l.name).toList();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _floatingHeartsKey.currentState?.spawnHeartsForUsers(likerNames);
+      });
+    }
 
     _animController.stop();
     _animController.reset();
@@ -237,125 +248,258 @@ class _StoryViewerDialogState extends State<StoryViewerDialog>
     }
   }
 
+  Future<void> _handleToggleLike(StoryItem currentStory, [Offset? tapPosition]) async {
+    final isLiked = currentStory.isLikedBy(widget.currentUserEmail);
+
+    // Memicu partikel animasi love melayang bertuliskan nama pengguna
+    _floatingHeartsKey.currentState?.spawnHeart(
+      tapPosition,
+      isLiked ? 2 : 4,
+      widget.currentUserName,
+    );
+
+    // Optimistic UI Update
+    setState(() {
+      final cleanEmail = widget.currentUserEmail.toLowerCase().trim();
+      if (isLiked) {
+        currentStory.likes.removeWhere((l) => l.email.toLowerCase().trim() == cleanEmail);
+      } else {
+        currentStory.likes.add(
+          StoryLikeInfo(
+            email: cleanEmail,
+            name: widget.currentUserName,
+            tag: widget.currentUserTag,
+            likedAt: DateTime.now(),
+          ),
+        );
+      }
+    });
+
+    // Simpan perubahan ke Firestore
+    await _storyService.toggleStoryLike(
+      storyId: currentStory.id,
+      userEmail: widget.currentUserEmail,
+      userName: widget.currentUserName,
+      userTag: widget.currentUserTag,
+    );
+  }
+
   void _showViewersModal(StoryItem currentStory) {
     _pauseTimer();
+
+    int selectedTab = 0; // 0 = Semua Penonton, 1 = Disukai
 
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
+      isScrollControlled: true,
       builder: (ctx) {
-        final isDark = Theme.of(ctx).brightness == Brightness.dark;
-        final viewers = currentStory.viewers;
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final isDark = Theme.of(context).brightness == Brightness.dark;
+            final viewers = currentStory.viewers;
+            final likes = currentStory.likes;
 
-        return Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: isDark ? AppColors.darkSurface : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-          ),
-          child: SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: Container(
-                    width: 36,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade400,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Row(
+            final displayList = selectedTab == 1
+                ? viewers.where((v) => currentStory.isLikedBy(v.email)).toList()
+                : viewers;
+
+            return Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: isDark ? AppColors.darkSurface : Colors.white,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
+              ),
+              child: SafeArea(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.remove_red_eye_rounded, color: Color(0xFFE11D48), size: 20),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Dilihat oleh ${viewers.length} Civitas',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                if (viewers.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 24),
-                    child: Center(
-                      child: Text(
-                        'Belum ada yang melihat story ini.',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+                    Center(
+                      child: Container(
+                        width: 36,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade400,
+                          borderRadius: BorderRadius.circular(2),
                         ),
                       ),
                     ),
-                  )
-                else
-                  ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.of(context).size.height * 0.4,
-                    ),
-                    child: ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: viewers.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (context, idx) {
-                        final v = viewers[idx];
-                        final tagColor = UserTagResolver.getTagColor(v.tag);
-                        final timeAgo = _formatTimeAgo(v.viewedAt);
-
-                        return ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                          leading: UserAvatar(email: v.email, name: v.name, radius: 18),
-                          title: Row(
+                    const SizedBox(height: 14),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.remove_red_eye_rounded, color: Color(0xFFE11D48), size: 20),
+                            const SizedBox(width: 6),
+                            Text(
+                              '${viewers.length} Civitas',
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                            ),
+                          ],
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE11D48).withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
                             children: [
-                              Flexible(
-                                child: Text(
-                                  v.name,
-                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                                decoration: BoxDecoration(
-                                  color: tagColor.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  v.tag,
-                                  style: TextStyle(
-                                    color: tagColor,
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.bold,
-                                  ),
+                              const Icon(Icons.favorite_rounded, color: Color(0xFFE11D48), size: 14),
+                              const SizedBox(width: 4),
+                              Text(
+                                '${likes.length} Disukai',
+                                style: const TextStyle(
+                                  color: Color(0xFFE11D48),
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12.5,
                                 ),
                               ),
                             ],
                           ),
-                          subtitle: Text(
-                            v.email,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: [
+                        ChoiceChip(
+                          label: Text('Semua (${viewers.length})'),
+                          selected: selectedTab == 0,
+                          onSelected: (val) {
+                            if (val) setModalState(() => selectedTab = 0);
+                          },
+                          selectedColor: const Color(0xFFE11D48),
+                          labelStyle: TextStyle(
+                            color: selectedTab == 0 ? Colors.white : (isDark ? Colors.white70 : Colors.black87),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.favorite_rounded,
+                                size: 13,
+                                color: selectedTab == 1 ? Colors.white : const Color(0xFFE11D48),
+                              ),
+                              const SizedBox(width: 4),
+                              Text('Menyukai (${likes.length})'),
+                            ],
+                          ),
+                          selected: selectedTab == 1,
+                          onSelected: (val) {
+                            if (val) setModalState(() => selectedTab = 1);
+                          },
+                          selectedColor: const Color(0xFFE11D48),
+                          labelStyle: TextStyle(
+                            color: selectedTab == 1 ? Colors.white : (isDark ? Colors.white70 : Colors.black87),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    if (displayList.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 24),
+                        child: Center(
+                          child: Text(
+                            selectedTab == 1
+                                ? 'Belum ada yang menyukai story ini.'
+                                : 'Belum ada yang melihat story ini.',
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 13,
                               color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
                             ),
                           ),
-                          trailing: Text(
-                            timeAgo,
-                            style: const TextStyle(fontSize: 10.5, color: Colors.grey),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-              ],
-            ),
-          ),
+                        ),
+                      )
+                    else
+                      ConstrainedBox(
+                        constraints: BoxConstraints(
+                          maxHeight: MediaQuery.of(context).size.height * 0.4,
+                        ),
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: displayList.length,
+                          separatorBuilder: (_, __) => const Divider(height: 1),
+                          itemBuilder: (context, idx) {
+                            final v = displayList[idx];
+                            final tagColor = UserTagResolver.getTagColor(v.tag);
+                            final timeAgo = _formatTimeAgo(v.viewedAt);
+                            final isLiked = currentStory.isLikedBy(v.email);
+
+                            return ListTile(
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                              leading: UserAvatar(email: v.email, name: v.name, radius: 18),
+                              title: Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      v.name,
+                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                    decoration: BoxDecoration(
+                                      color: tagColor.withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      v.tag,
+                                      style: TextStyle(
+                                        color: tagColor,
+                                        fontSize: 9.5,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              subtitle: Text(
+                                v.email,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+                                ),
+                              ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (isLiked) ...[
+                                    const Icon(
+                                      Icons.favorite_rounded,
+                                      color: Color(0xFFE11D48),
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 6),
+                                  ],
+                                  Text(
+                                    timeAgo,
+                                    style: const TextStyle(fontSize: 10.5, color: Colors.grey),
+                                  ),
+                                ],
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
         );
       },
     ).then((_) => _resumeTimer());
@@ -417,10 +561,13 @@ class _StoryViewerDialogState extends State<StoryViewerDialog>
     return Dialog(
       backgroundColor: Colors.black,
       insetPadding: EdgeInsets.zero,
-      child: GestureDetector(
-        onLongPressStart: (_) => _pauseTimer(),
-        onLongPressEnd: (_) => _resumeTimer(),
-        child: Stack(
+      child: FloatingHeartsOverlay(
+        key: _floatingHeartsKey,
+        child: GestureDetector(
+          onLongPressStart: (_) => _pauseTimer(),
+          onLongPressEnd: (_) => _resumeTimer(),
+          onDoubleTapDown: (details) => _handleToggleLike(currentStory, details.globalPosition),
+          child: Stack(
           children: [
             // ==================== BACKGROUND STORY (FOTO / VIDEO / TULISAN) ====================
             Positioned.fill(
@@ -716,7 +863,7 @@ class _StoryViewerDialogState extends State<StoryViewerDialog>
                     ),
 
                   if (isMe)
-                    // Baris Khusus Pemilik Story (Lihat Penonton)
+                    // Baris Khusus Pemilik Story (Lihat Penonton & Suka)
                     InkWell(
                       borderRadius: BorderRadius.circular(20),
                       onTap: () => _showViewersModal(currentStory),
@@ -730,10 +877,23 @@ class _StoryViewerDialogState extends State<StoryViewerDialog>
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            const Icon(Icons.remove_red_eye_rounded, color: Color(0xFFE11D48), size: 18),
-                            const SizedBox(width: 8),
+                            const Icon(Icons.favorite_rounded, color: Color(0xFFE11D48), size: 16),
+                            const SizedBox(width: 4),
                             Text(
-                              'Dilihat oleh ${currentStory.viewers.length} civitas',
+                              '${currentStory.likes.length}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text('•', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                            const SizedBox(width: 8),
+                            const Icon(Icons.remove_red_eye_rounded, color: Colors.white70, size: 16),
+                            const SizedBox(width: 4),
+                            Text(
+                              '${currentStory.viewers.length} civitas',
                               style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 13,
@@ -747,7 +907,7 @@ class _StoryViewerDialogState extends State<StoryViewerDialog>
                       ),
                     )
                   else
-                    // Baris Balas Story untuk Pengguna Lain
+                    // Baris Balas Story & Tombol Suka untuk Pengguna Lain
                     Row(
                       children: [
                         Expanded(
@@ -774,6 +934,31 @@ class _StoryViewerDialogState extends State<StoryViewerDialog>
                           ),
                         ),
                         const SizedBox(width: 8),
+                        // Tombol Menyukai Status (Love Button)
+                        Builder(
+                          builder: (btnCtx) {
+                            final isLikedByMe = currentStory.isLikedBy(widget.currentUserEmail);
+                            return IconButton(
+                              style: IconButton.styleFrom(
+                                backgroundColor: isLikedByMe ? const Color(0xFFE11D48) : Colors.black87,
+                                foregroundColor: Colors.white,
+                                side: isLikedByMe ? BorderSide.none : const BorderSide(color: Colors.white30),
+                              ),
+                              icon: Icon(
+                                isLikedByMe ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                                color: isLikedByMe ? Colors.white : const Color(0xFFF43F5E),
+                                size: 20,
+                              ),
+                              tooltip: isLikedByMe ? 'Batal Suka' : 'Sukai Status',
+                              onPressed: () {
+                                final RenderBox box = btnCtx.findRenderObject() as RenderBox;
+                                final pos = box.localToGlobal(box.size.center(Offset.zero));
+                                _handleToggleLike(currentStory, pos);
+                              },
+                            );
+                          },
+                        ),
+                        const SizedBox(width: 6),
                         IconButton(
                           style: IconButton.styleFrom(
                             backgroundColor: const Color(0xFFE11D48),
@@ -799,8 +984,9 @@ class _StoryViewerDialogState extends State<StoryViewerDialog>
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Color _parseHexColor(String hexString, {Color fallback = const Color(0xFFE11D48)}) {
     try {
