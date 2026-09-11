@@ -6,7 +6,7 @@ import 'package:baknusmail/data/models/folder_info.dart';
 
 void main() {
   test('MailcowConfig constants smoke test', () {
-    expect(MailcowConfig.appName, 'BaknusMail');
+    expect(MailcowConfig.appName, 'BaknusID');
     expect(MailcowConfig.domain, 'smk.baktinusantara666.sch.id');
     expect(MailcowConfig.smtpPort, 465);
     expect(MailcowConfig.imapPort, 993);

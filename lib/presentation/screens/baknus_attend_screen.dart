@@ -4,12 +4,14 @@ import '../../core/theme/app_colors.dart';
 import '../../data/models/baknus_service_models.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/baknus_provider.dart';
+import '../../providers/attendance_provider.dart';
 
 import '../../core/config/mailcow_config.dart';
 import '../../core/utils/url_helper.dart';
 
 import '../widgets/app_background.dart';
 import '../widgets/attendance_calendar_widget.dart';
+import '../widgets/selfie_attendance_card.dart';
 
 class BaknusAttendScreen extends StatefulWidget {
   const BaknusAttendScreen({super.key});
@@ -65,6 +67,8 @@ class _BaknusAttendScreenState extends State<BaknusAttendScreen> {
               onPressed: () {
                 if (email.isNotEmpty) {
                   baknus.loadAllStats(email);
+                  context.read<AttendanceProvider>().fetchStatus();
+                  context.read<AttendanceProvider>().checkLocationAndDistance();
                   setState(() {
                     _calendarData = null;
                   });
@@ -76,7 +80,11 @@ class _BaknusAttendScreenState extends State<BaknusAttendScreen> {
         body: RefreshIndicator(
           onRefresh: () async {
             if (email.isNotEmpty) {
-              await baknus.loadAllStats(email);
+              await Future.wait([
+                baknus.loadAllStats(email),
+                context.read<AttendanceProvider>().fetchStatus(),
+                context.read<AttendanceProvider>().checkLocationAndDistance(),
+              ]);
               if (mounted) {
                 setState(() {
                   _calendarData = null;
@@ -87,30 +95,6 @@ class _BaknusAttendScreenState extends State<BaknusAttendScreen> {
           child: ListView(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             children: [
-              // Tombol Buka Aplikasi Web dengan Auto-Fill Email
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF059669),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  elevation: 3,
-                ),
-                icon: const Icon(Icons.open_in_browser_rounded, size: 22),
-                label: const Text(
-                  'Buka Web BaknusAttend (Auto-Fill Login)',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
-                ),
-                onPressed: () => UrlHelper.openServiceWebUrl(
-                  MailcowConfig.attendWebUrl,
-                  userEmail: email,
-                  context: context,
-                ),
-              ),
-              const SizedBox(height: 14),
-
               // Header Profil (Nama, Email, Role)
               Container(
                 padding: const EdgeInsets.all(18),
@@ -180,6 +164,37 @@ class _BaknusAttendScreenState extends State<BaknusAttendScreen> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ],
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // ==================== 1. MODUL PRESENSI SELFIE & GPS GEOFENCING ====================
+              SelfieAttendanceCard(
+                userEmail: email,
+                userPassword: user?.password,
+              ),
+              const SizedBox(height: 16),
+
+              // Tombol Buka Aplikasi Web dengan Auto-Fill Email
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF059669),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  elevation: 2,
+                ),
+                icon: const Icon(Icons.open_in_browser_rounded, size: 20),
+                label: const Text(
+                  'Buka Portal Web BaknusAttend',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+                onPressed: () => UrlHelper.openServiceWebUrl(
+                  MailcowConfig.attendWebUrl,
+                  userEmail: email,
+                  context: context,
                 ),
               ),
               const SizedBox(height: 18),

@@ -89,11 +89,11 @@ class FCMService {
       final titleStr = message.data['notif_title'] ?? message.notification?.title ?? '';
       final bodyStr = message.data['notif_body'] ?? message.data['body'] ?? message.data['message'] ?? message.notification?.body ?? '';
       final config = _getChannelAndSound(senderStr, subjectStr, titleStr, bodyStr);
-      if (config['id'] == 'channel_baknus_attend_v3') {
+      if (config['id'] == 'channel_baknus_attend_v4') {
         route = '/attend';
-      } else if (config['id'] == 'channel_baknus_drive_v3') {
+      } else if (config['id'] == 'channel_baknus_drive_v4') {
         route = '/drive';
-      } else if (config['id'] == 'channel_baknus_talim_v3') {
+      } else if (config['id'] == 'channel_baknus_talim_v4') {
         route = '/talim';
       } else {
         route = '/home';
@@ -126,11 +126,11 @@ class FCMService {
         final titleStr = decoded['notif_title'] ?? decoded['title'] ?? '';
         final bodyStr = decoded['notif_body'] ?? decoded['body'] ?? decoded['message'] ?? '';
         final config = _getChannelAndSound(senderStr, subjectStr, titleStr, bodyStr);
-        if (config['id'] == 'channel_baknus_attend_v3') {
+        if (config['id'] == 'channel_baknus_attend_v4') {
           route = '/attend';
-        } else if (config['id'] == 'channel_baknus_drive_v3') {
+        } else if (config['id'] == 'channel_baknus_drive_v4') {
           route = '/drive';
-        } else if (config['id'] == 'channel_baknus_talim_v3') {
+        } else if (config['id'] == 'channel_baknus_talim_v4') {
           route = '/talim';
         } else {
           route = '/home';
@@ -188,14 +188,21 @@ class FCMService {
       },
     );
 
-    // Buat Notification Channel khusus dengan suara custom di Android
+    // Buat Notification Channel khusus dengan suara custom di Android & minta izin notifikasi Android 13+
     final androidPlugin = _localNotificationsPlugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
     if (androidPlugin != null) {
+      try {
+        await androidPlugin.requestNotificationsPermission();
+        await androidPlugin.requestExactAlarmsPermission();
+      } catch (e) {
+        debugPrint('Warning: Android local notification permission request failed: $e');
+      }
+
       await androidPlugin.createNotificationChannel(
         const AndroidNotificationChannel(
-          'channel_baknus_attend_v3',
+          'channel_baknus_attend_v4',
           'BaknusAttend Notifications',
           description: 'Notifikasi presensi dan kehadiran BaknusAttend',
           importance: Importance.max,
@@ -205,7 +212,7 @@ class FCMService {
       );
       await androidPlugin.createNotificationChannel(
         const AndroidNotificationChannel(
-          'channel_baknus_drive_v3',
+          'channel_baknus_drive_v4',
           'BaknusDrive Notifications',
           description: 'Notifikasi penyimpanan dan berkas BaknusDrive',
           importance: Importance.max,
@@ -215,7 +222,7 @@ class FCMService {
       );
       await androidPlugin.createNotificationChannel(
         const AndroidNotificationChannel(
-          'channel_baknus_talim_v3',
+          'channel_baknus_talim_v4',
           'BaknusTalim Notifications',
           description: 'Notifikasi kegiatan BaknusTalim',
           importance: Importance.max,
@@ -225,7 +232,7 @@ class FCMService {
       );
       await androidPlugin.createNotificationChannel(
         const AndroidNotificationChannel(
-          'channel_email_umum_v3',
+          'channel_email_umum_v4',
           'Email Notifications',
           description: 'Notifikasi email umum & pesan',
           importance: Importance.max,
@@ -272,6 +279,14 @@ class FCMService {
 
   // Menampilkan notifikasi background
   Future<void> showBackgroundNotification(RemoteMessage message) async {
+    // Jika pesan sudah mengandung payload notification langsung dari FCM SDK,
+    // Android FCM SDK sudah menampilkan notifikasi secara otomatis di status bar.
+    // Menampilkan local notification di sini akan menyebabkan notifikasi ganda (double).
+    if (message.notification != null) {
+      debugPrint('Skipping local notification in background because FCM SDK handled message.notification');
+      return;
+    }
+
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const InitializationSettings initializationSettings =
@@ -284,7 +299,7 @@ class FCMService {
     if (androidPlugin != null) {
       await androidPlugin.createNotificationChannel(
         const AndroidNotificationChannel(
-          'channel_baknus_attend_v3',
+          'channel_baknus_attend_v4',
           'BaknusAttend Notifications',
           description: 'Notifikasi presensi dan kehadiran BaknusAttend',
           importance: Importance.max,
@@ -294,7 +309,7 @@ class FCMService {
       );
       await androidPlugin.createNotificationChannel(
         const AndroidNotificationChannel(
-          'channel_baknus_drive_v3',
+          'channel_baknus_drive_v4',
           'BaknusDrive Notifications',
           description: 'Notifikasi penyimpanan dan berkas BaknusDrive',
           importance: Importance.max,
@@ -304,7 +319,7 @@ class FCMService {
       );
       await androidPlugin.createNotificationChannel(
         const AndroidNotificationChannel(
-          'channel_baknus_talim_v3',
+          'channel_baknus_talim_v4',
           'BaknusTalim Notifications',
           description: 'Notifikasi kegiatan BaknusTalim',
           importance: Importance.max,
@@ -314,7 +329,7 @@ class FCMService {
       );
       await androidPlugin.createNotificationChannel(
         const AndroidNotificationChannel(
-          'channel_email_umum_v3',
+          'channel_email_umum_v4',
           'Email Notifications',
           description: 'Notifikasi email umum & pesan',
           importance: Importance.max,
@@ -336,7 +351,7 @@ class FCMService {
         combined.contains('kehadiran') ||
         combined.contains('baknusattend')) {
       return {
-        'id': 'channel_baknus_attend_v3',
+        'id': 'channel_baknus_attend_v4',
         'name': 'BaknusAttend Notifications',
         'desc': 'Notifikasi presensi dan kehadiran BaknusAttend',
         'sound': 'sound_baknus_attend',
@@ -346,7 +361,7 @@ class FCMService {
         combined.contains('penyimpanan') ||
         combined.contains('baknusdrive')) {
       return {
-        'id': 'channel_baknus_drive_v3',
+        'id': 'channel_baknus_drive_v4',
         'name': 'BaknusDrive Notifications',
         'desc': 'Notifikasi penyimpanan dan berkas BaknusDrive',
         'sound': 'sound_baknus_drive',
@@ -356,14 +371,14 @@ class FCMService {
         combined.contains('kajian') ||
         combined.contains('baknustalim')) {
       return {
-        'id': 'channel_baknus_talim_v3',
+        'id': 'channel_baknus_talim_v4',
         'name': 'BaknusTalim Notifications',
         'desc': 'Notifikasi kegiatan BaknusTalim',
         'sound': 'sound_baknus_talim',
       };
     } else {
       return {
-        'id': 'channel_email_umum_v3',
+        'id': 'channel_email_umum_v4',
         'name': 'Email Notifications',
         'desc': 'Notifikasi email umum & pesan',
         'sound': 'sound_umum',
@@ -388,21 +403,29 @@ class FCMService {
     late Map<String, String> channelConfig;
     if (channelIdFromData.isNotEmpty) {
       String sound = soundNameFromData;
-      if (sound.isEmpty) {
-        if (channelIdFromData == 'channel_baknus_attend_v3') {
-          sound = 'sound_baknus_attend';
-        } else if (channelIdFromData == 'channel_baknus_drive_v3') {
-          sound = 'sound_baknus_drive';
-        } else if (channelIdFromData == 'channel_baknus_talim_v3') {
-          sound = 'sound_baknus_talim';
-        } else {
-          sound = 'sound_umum';
-        }
+      String name = 'Email Notifications';
+      String desc = 'Notifikasi email umum & pesan';
+
+      if (channelIdFromData == 'channel_baknus_attend_v4' || channelIdFromData == 'channel_baknus_attend_v3') {
+        sound = sound.isEmpty ? 'sound_baknus_attend' : sound;
+        name = 'BaknusAttend Notifications';
+        desc = 'Notifikasi presensi dan kehadiran BaknusAttend';
+      } else if (channelIdFromData == 'channel_baknus_drive_v4' || channelIdFromData == 'channel_baknus_drive_v3') {
+        sound = sound.isEmpty ? 'sound_baknus_drive' : sound;
+        name = 'BaknusDrive Notifications';
+        desc = 'Notifikasi penyimpanan dan berkas BaknusDrive';
+      } else if (channelIdFromData == 'channel_baknus_talim_v4' || channelIdFromData == 'channel_baknus_talim_v3') {
+        sound = sound.isEmpty ? 'sound_baknus_talim' : sound;
+        name = 'BaknusTalim Notifications';
+        desc = 'Notifikasi kegiatan BaknusTalim';
+      } else {
+        sound = sound.isEmpty ? 'sound_umum' : sound;
       }
+
       channelConfig = {
-        'id': channelIdFromData,
-        'name': 'Notifikasi BaknusMail',
-        'desc': 'Notifikasi layanan BaknusMail',
+        'id': 'channel_${channelIdFromData.replaceAll(RegExp(r'_v\d+$'), '')}_v4',
+        'name': name,
+        'desc': desc,
         'sound': sound,
       };
     } else {
@@ -411,11 +434,11 @@ class FCMService {
 
     String title = titleFromPayload;
     if (title.isEmpty || title == 'Pesan Masuk' || title == 'Email Baru') {
-      if (channelConfig['id'] == 'channel_baknus_attend_v3') {
+      if (channelConfig['id'] == 'channel_baknus_attend_v4') {
         title = 'BaknusAttend - Presensi';
-      } else if (channelConfig['id'] == 'channel_baknus_drive_v3') {
+      } else if (channelConfig['id'] == 'channel_baknus_drive_v4') {
         title = 'BaknusDrive - Berkas';
-      } else if (channelConfig['id'] == 'channel_baknus_talim_v3') {
+      } else if (channelConfig['id'] == 'channel_baknus_talim_v4') {
         title = 'BaknusTalim - Kegiatan';
       } else {
         title = senderStr.isNotEmpty ? senderStr.split('<').first.trim() : 'Pesan Masuk';
@@ -428,11 +451,11 @@ class FCMService {
 
     String targetRoute = message.data['route'] ?? '';
     if (targetRoute.isEmpty || targetRoute == '/home') {
-      if (channelConfig['id'] == 'channel_baknus_attend_v3') {
+      if (channelConfig['id'] == 'channel_baknus_attend_v4') {
         targetRoute = '/attend';
-      } else if (channelConfig['id'] == 'channel_baknus_drive_v3') {
+      } else if (channelConfig['id'] == 'channel_baknus_drive_v4') {
         targetRoute = '/drive';
-      } else if (channelConfig['id'] == 'channel_baknus_talim_v3') {
+      } else if (channelConfig['id'] == 'channel_baknus_talim_v4') {
         targetRoute = '/talim';
       } else {
         targetRoute = '/home';
@@ -443,9 +466,13 @@ class FCMService {
     final payloadMap = Map<String, dynamic>.from(message.data);
     payloadMap['route'] = targetRoute;
 
+    final notifId = isChat
+        ? (message.data['peer_email'] ?? message.data['sender_email'] ?? 'chat').hashCode
+        : (DateTime.now().millisecondsSinceEpoch & 0x7FFFFFFF);
+
     final notifTag = isChat
         ? 'baknus_chat_${message.data["peer_email"] ?? message.data["sender_email"] ?? "dm"}'
-        : 'baknus_notif_${channelConfig["id"]}';
+        : 'baknus_notif_${channelConfig["id"]}_$notifId';
 
     final AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
@@ -453,7 +480,7 @@ class FCMService {
       channelConfig['name']!,
       channelDescription: channelConfig['desc'],
       importance: Importance.max,
-      priority: Priority.high,
+      priority: Priority.max,
       playSound: true,
       sound: RawResourceAndroidNotificationSound(channelConfig['sound']!),
       showWhen: true,
@@ -465,17 +492,34 @@ class FCMService {
     final NotificationDetails platformChannelSpecifics =
         NotificationDetails(android: androidPlatformChannelSpecifics);
 
-    final notifId = isChat
-        ? (message.data['peer_email'] ?? message.data['sender_email'] ?? 'chat').hashCode
-        : DateTime.now().millisecondsSinceEpoch ~/ 1000;
-
-    await _localNotificationsPlugin.show(
-      id: notifId,
-      title: title,
-      body: body,
-      notificationDetails: platformChannelSpecifics,
-      payload: jsonEncode(payloadMap),
-    );
+    try {
+      await _localNotificationsPlugin.show(
+        id: notifId,
+        title: title,
+        body: body,
+        notificationDetails: platformChannelSpecifics,
+        payload: jsonEncode(payloadMap),
+      );
+    } catch (e) {
+      debugPrint('Warning: Local notification with custom sound failed: $e. Fallback to default sound.');
+      final fallbackAndroidDetails = AndroidNotificationDetails(
+        channelConfig['id']!,
+        channelConfig['name']!,
+        channelDescription: channelConfig['desc'],
+        importance: Importance.max,
+        priority: Priority.max,
+        playSound: true,
+        showWhen: true,
+        tag: notifTag,
+      );
+      await _localNotificationsPlugin.show(
+        id: notifId,
+        title: title,
+        body: body,
+        notificationDetails: NotificationDetails(android: fallbackAndroidDetails),
+        payload: jsonEncode(payloadMap),
+      );
+    }
   }
 
   // Navigasi ke layar target (Chat Japri / BaknusAttend / Home / Drive / Talim) saat notifikasi di-klik
@@ -535,7 +579,13 @@ class FCMService {
     _currentRegisteredEmail = cleanEmail;
 
     try {
-      String? token = await messaging.getToken();
+      String? token = await messaging.getToken().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          debugPrint('Warning: FCM getToken() timed out due to Emulator DNS/network issues.');
+          return null;
+        },
+      );
       if (token != null) {
         debugPrint('FCM Token: $token');
         await firestore
@@ -546,11 +596,11 @@ class FCMService {
               'fcm_tokens': FieldValue.arrayUnion([token]),
               'updated_at': FieldValue.serverTimestamp(),
             }, SetOptions(merge: true))
-            .timeout(const Duration(seconds: 15));
+            .timeout(const Duration(seconds: 10));
         debugPrint('Token registered for $cleanEmail');
       }
     } catch (e) {
-      debugPrint('Warning: Could not save token to Firestore: $e');
+      debugPrint('Warning: Could not save token to Firestore (Network/DNS issue): $e');
     }
   }
 
@@ -594,11 +644,11 @@ class FCMService {
     required String subject,
   }) async {
     const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-      'channel_email_umum_v3',
+      'channel_email_umum_v4',
       'Email Notifications',
       channelDescription: 'Notifikasi email umum & pesan',
       importance: Importance.max,
-      priority: Priority.high,
+      priority: Priority.max,
       playSound: true,
       sound: RawResourceAndroidNotificationSound('sound_umum'),
       showWhen: true,
@@ -609,7 +659,7 @@ class FCMService {
     const NotificationDetails platformDetails =
         NotificationDetails(android: androidDetails);
 
-    final notifId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final notifId = (DateTime.now().millisecondsSinceEpoch & 0x7FFFFFFF);
     final payloadMap = {
       'route': '/home',
       'title': 'Email Terkirim',
@@ -623,6 +673,54 @@ class FCMService {
       notificationDetails: platformDetails,
       payload: jsonEncode(payloadMap),
     );
+  }
+
+  /// Menampilkan Notifikasi Uji Coba Manual (BaknusAttend / BaknusDrive / BaknusTalim / Email)
+  Future<void> showTestNotification(String type) async {
+    late RemoteMessage testMessage;
+    if (type == 'attend') {
+      testMessage = const RemoteMessage(
+        data: {
+          'route': '/attend',
+          'channel_id': 'channel_baknus_attend_v4',
+          'sound_name': 'sound_baknus_attend',
+          'notif_title': 'BaknusAttend - Presensi Berhasil',
+          'notif_body': 'Presensi kehadiran Anda hari ini jam 07:00 WIB telah tercatat!',
+        },
+      );
+    } else if (type == 'drive') {
+      testMessage = const RemoteMessage(
+        data: {
+          'route': '/drive',
+          'channel_id': 'channel_baknus_drive_v4',
+          'sound_name': 'sound_baknus_drive',
+          'notif_title': 'BaknusDrive - Berkas Baru',
+          'notif_body': 'File Modul_Pembelajaran_2026.pdf berhasil diunggah.',
+        },
+      );
+    } else if (type == 'talim') {
+      testMessage = const RemoteMessage(
+        data: {
+          'route': '/talim',
+          'channel_id': 'channel_baknus_talim_v4',
+          'sound_name': 'sound_baknus_talim',
+          'notif_title': 'BaknusTalim - Pengumuman Kajian',
+          'notif_body': 'Jadwal Kajian Dhuha & Doa Bersama di Masjid BN 666.',
+        },
+      );
+    } else {
+      testMessage = const RemoteMessage(
+        data: {
+          'route': '/home',
+          'channel_id': 'channel_email_umum_v4',
+          'sound_name': 'sound_umum',
+          'notif_title': 'BaknusMail - Email Baru Masuk',
+          'notif_body': 'Pengirim: Kepala Sekolah | Subjek: Pengumuman Ujian Semester',
+        },
+      );
+    }
+
+    await _showLocalNotification(testMessage);
   }
 }
 

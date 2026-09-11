@@ -63,20 +63,24 @@ exports.incomingEmailWebhook = onRequest({ cors: true }, async (req, res) => {
     }
 
     const userData = userDoc.data();
-    let tokens = userData.fcm_tokens || [];
-    if (tokens.length === 0 && userData.fcm_token) {
-      tokens = [userData.fcm_token];
+    let rawTokens = userData.fcm_tokens || [];
+    if (rawTokens.length === 0 && userData.fcm_token) {
+      rawTokens = [userData.fcm_token];
     }
+    const tokens = Array.from(new Set(rawTokens)).filter(
+      (t) => typeof t === "string" && t.trim().length > 0
+    );
 
     if (tokens.length === 0) {
       logger.info(`No valid FCM tokens found for user: ${to}`);
       return res.status(404).json({ message: `No FCM tokens found for ${to}` });
     }
 
-    // Tentukan channel_id, sound, route, dan notif_title berdasarkan pengirim / subjek email
+    // Tentukan channel_id, sound, route, dan notif_title berdasarkan pengirim, subjek, & isi email
     const lowerFrom = (from || "").toLowerCase();
     const lowerSubject = (subject || "").toLowerCase();
-    let channelId = "channel_email_umum_v3";
+    const lowerBody = (cleanSnippet || "").toLowerCase();
+    let channelId = "channel_email_umum_v4";
     let soundName = "sound_umum";
     let route = "/home";
     let notifTitle = "Pesan Masuk";
@@ -91,9 +95,11 @@ exports.incomingEmailWebhook = onRequest({ cors: true }, async (req, res) => {
       lowerSubject.includes("baknusattend") ||
       lowerSubject.includes("attend") ||
       lowerSubject.includes("presensi") ||
-      lowerSubject.includes("kehadiran")
+      lowerSubject.includes("kehadiran") ||
+      lowerBody.includes("attend") ||
+      lowerBody.includes("presensi")
     ) {
-      channelId = "channel_baknus_attend_v3";
+      channelId = "channel_baknus_attend_v4";
       soundName = "sound_baknus_attend";
       route = "/attend";
       notifTitle = "BaknusAttend - Presensi";
@@ -102,9 +108,11 @@ exports.incomingEmailWebhook = onRequest({ cors: true }, async (req, res) => {
       lowerSubject.includes("baknusdrive") ||
       lowerSubject.includes("drive") ||
       lowerSubject.includes("berkas") ||
-      lowerSubject.includes("penyimpanan")
+      lowerSubject.includes("penyimpanan") ||
+      lowerBody.includes("drive") ||
+      lowerBody.includes("berkas")
     ) {
-      channelId = "channel_baknus_drive_v3";
+      channelId = "channel_baknus_drive_v4";
       soundName = "sound_baknus_drive";
       route = "/drive";
       notifTitle = "BaknusDrive - Berkas";
@@ -114,13 +122,18 @@ exports.incomingEmailWebhook = onRequest({ cors: true }, async (req, res) => {
       lowerSubject.includes("baknustalim") ||
       lowerSubject.includes("talim") ||
       lowerSubject.includes("ta'lim") ||
-      lowerSubject.includes("kajian")
+      lowerSubject.includes("kajian") ||
+      lowerBody.includes("talim") ||
+      lowerBody.includes("kajian")
     ) {
-      channelId = "channel_baknus_talim_v3";
+      channelId = "channel_baknus_talim_v4";
       soundName = "sound_baknus_talim";
       route = "/talim";
       notifTitle = "BaknusTalim - Kegiatan";
     } else {
+      channelId = "channel_email_umum_v4";
+      soundName = "sound_umum";
+      route = "/home";
       notifTitle = senderDisplayName ? `Email dari ${senderDisplayName}` : "Email Baru Masuk";
     }
 
@@ -207,10 +220,13 @@ exports.onChatMessageCreated = onDocumentCreated(
     }
 
     const userData = userDoc.data();
-    let tokens = userData.fcm_tokens || [];
-    if (tokens.length === 0 && userData.fcm_token) {
-      tokens = [userData.fcm_token];
+    let rawTokens = userData.fcm_tokens || [];
+    if (rawTokens.length === 0 && userData.fcm_token) {
+      rawTokens = [userData.fcm_token];
     }
+    const tokens = Array.from(new Set(rawTokens)).filter(
+      (t) => typeof t === "string" && t.trim().length > 0
+    );
 
     if (tokens.length === 0) return;
 
@@ -222,18 +238,13 @@ exports.onChatMessageCreated = onDocumentCreated(
     const payload = {
       android: {
         priority: "high",
-        notification: {
-          channelId: "channel_email_umum_v3",
-          priority: "max",
-          defaultSound: true,
-        },
       },
       data: {
         click_action: "FLUTTER_NOTIFICATION_CLICK",
         route: "/chat",
         notif_title: notifTitle,
         notif_body: notifBody,
-        channel_id: "channel_email_umum_v3",
+        channel_id: "channel_email_umum_v4",
         sound_name: "sound_umum",
         sender_email: senderEmail,
         sender_name: senderName,
@@ -241,10 +252,6 @@ exports.onChatMessageCreated = onDocumentCreated(
         peer_email: senderEmail,
         peer_name: senderName,
         peer_tag: senderRole,
-      },
-      notification: {
-        title: notifTitle,
-        body: notifBody,
       },
       tokens: tokens,
     };

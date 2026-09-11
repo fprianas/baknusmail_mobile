@@ -114,6 +114,70 @@ class StorageService {
     }
   }
 
+  // Security & App Lock
+  static const String keyAppLockEnabled = 'baknus_app_lock_enabled';
+  static const String keyAppPin = 'baknus_app_pin_hash';
+  static const String keyBiometricEnabled = 'baknus_biometric_enabled';
+  static const String keyLockTimeoutSeconds = 'baknus_lock_timeout_seconds';
+
+  bool isAppLockEnabled() {
+    return _prefs.getBool(keyAppLockEnabled) ?? false;
+  }
+
+  Future<void> setAppLockEnabled(bool enabled) async {
+    await _prefs.setBool(keyAppLockEnabled, enabled);
+  }
+
+  String? getAppPin() {
+    return _prefs.getString(keyAppPin);
+  }
+
+  Future<void> setAppPin(String? pin) async {
+    if (pin == null || pin.isEmpty) {
+      await _prefs.remove(keyAppPin);
+    } else {
+      await _prefs.setString(keyAppPin, pin);
+    }
+  }
+
+  bool isBiometricEnabled() {
+    return _prefs.getBool(keyBiometricEnabled) ?? false;
+  }
+
+  Future<void> setBiometricEnabled(bool enabled) async {
+    await _prefs.setBool(keyBiometricEnabled, enabled);
+  }
+
+  int getLockTimeoutSeconds() {
+    // Default 0: Kunci segera saat app keluar
+    return _prefs.getInt(keyLockTimeoutSeconds) ?? 0;
+  }
+
+  Future<void> setLockTimeoutSeconds(int seconds) async {
+    await _prefs.setInt(keyLockTimeoutSeconds, seconds);
+  }
+
+  // BaknusChat Grace Period Settings
+  static const String keyChatGraceEnabled = 'baknus_chat_grace_enabled';
+  static const String keyChatGraceTimeoutSeconds = 'baknus_chat_grace_timeout_seconds';
+
+  bool isChatGraceEnabled() {
+    return _prefs.getBool(keyChatGraceEnabled) ?? true;
+  }
+
+  Future<void> setChatGraceEnabled(bool enabled) async {
+    await _prefs.setBool(keyChatGraceEnabled, enabled);
+  }
+
+  int getChatGraceTimeoutSeconds() {
+    // Default 10 menit (600 detik)
+    return _prefs.getInt(keyChatGraceTimeoutSeconds) ?? 600;
+  }
+
+  Future<void> setChatGraceTimeoutSeconds(int seconds) async {
+    await _prefs.setInt(keyChatGraceTimeoutSeconds, seconds);
+  }
+
   Future<void> clearAllCache() async {
     final keys = _prefs.getKeys().where((k) => k.startsWith('baknus_cached_emails_') || k == keySavedDrafts);
     for (final k in keys) {

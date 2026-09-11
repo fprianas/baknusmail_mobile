@@ -4,6 +4,7 @@ import 'package:flutter_spinkit/flutter_spinkit.dart';
 import '../../core/config/mailcow_config.dart';
 import '../../core/theme/app_colors.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/attendance_provider.dart';
 import '../../providers/mail_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../widgets/app_background.dart';
@@ -46,6 +47,16 @@ class _LoginScreenState extends State<LoginScreen> {
     );
 
     if (success && mounted) {
+      // Sinkronkan akun presensi otomatis saat login pertama
+      try {
+        context.read<AttendanceProvider>().initialize(
+              userEmail: username,
+              password: _passwordController.text,
+            );
+      } catch (e) {
+        debugPrint('Attendance auto-sync warning: $e');
+      }
+
       final isParent = await RoleSelectionDialog.show(context);
       if (mounted) {
         await auth.setParentMode(isParent ?? false);

@@ -15,6 +15,8 @@ class DirectConversationItem {
   final int unreadCount;
   final bool isPinned;
   final DateTime? pinnedAt;
+  final bool isArchived;
+  final DateTime? archivedAt;
 
   DirectConversationItem({
     required this.peerEmail,
@@ -25,6 +27,8 @@ class DirectConversationItem {
     this.unreadCount = 0,
     this.isPinned = false,
     this.pinnedAt,
+    this.isArchived = false,
+    this.archivedAt,
   });
 
   factory DirectConversationItem.fromMap(Map<String, dynamic> map) {
@@ -43,6 +47,8 @@ class DirectConversationItem {
       unreadCount: (map['unreadCount'] is num) ? (map['unreadCount'] as num).toInt() : 0,
       isPinned: map['isPinned'] == true,
       pinnedAt: map['pinnedAt'] != null ? parseDate(map['pinnedAt']) : null,
+      isArchived: map['isArchived'] == true,
+      archivedAt: map['archivedAt'] != null ? parseDate(map['archivedAt']) : null,
     );
   }
 
@@ -55,6 +61,8 @@ class DirectConversationItem {
         'unreadCount': unreadCount,
         'isPinned': isPinned,
         'pinnedAt': pinnedAt != null ? Timestamp.fromDate(pinnedAt!) : null,
+        'isArchived': isArchived,
+        'archivedAt': archivedAt != null ? Timestamp.fromDate(archivedAt!) : null,
       };
 }
 
@@ -501,6 +509,29 @@ class ChatService {
     }
   }
 
+  /// Arsipkan atau batalkan arsip percakapan Japri
+  Future<bool> toggleArchiveConversation({
+    required String userEmail,
+    required String peerEmail,
+    required bool isArchived,
+  }) async {
+    final cleanUser = userEmail.toLowerCase().trim();
+    final cleanPeer = peerEmail.toLowerCase().trim();
+    if (cleanUser.isEmpty || cleanPeer.isEmpty) return false;
+
+    final docRef = _firestore
+        .collection(directConversationsCollection)
+        .doc(cleanUser)
+        .collection('peers')
+        .doc(cleanPeer);
+
+    await docRef.set({
+      'isArchived': isArchived,
+      'archivedAt': isArchived ? FieldValue.serverTimestamp() : null,
+    }, SetOptions(merge: true));
+    return true;
+  }
+
   /// Stream total unread chat messages count across all active conversations
   Stream<int> getUnreadCountStream(String userEmail) {
     final cleanEmail = userEmail.toLowerCase().trim();
@@ -596,6 +627,8 @@ class ChatService {
     String? replyToId,
     String? replyToSenderName,
     String? replyToText,
+    String type = 'text',
+    String? metadata,
   }) async {
     final cleanText = text.trim();
     if (cleanText.isEmpty) return;
@@ -608,11 +641,16 @@ class ChatService {
         'senderEmail': senderEmail.toLowerCase().trim(),
         'senderName': senderName.trim(),
         'senderRole': senderRole.trim(),
+        'type': type,
         'timestamp': FieldValue.serverTimestamp(),
         'expiresAt': null,
         'isRead': false,
         'readAt': null,
       };
+
+      if (metadata != null && metadata.isNotEmpty) {
+        msgData['metadata'] = metadata;
+      }
 
       if (replyToId != null && replyToId.isNotEmpty) {
         msgData['replyToId'] = replyToId;

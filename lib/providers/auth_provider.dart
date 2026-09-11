@@ -193,6 +193,8 @@ class AuthProvider extends ChangeNotifier {
     _status = AuthStatus.authenticated;
     _errorMessage = null;
     notifyListeners();
+    // Register token for demo account
+    _fcmService.registerToken(user.email);
   }
 
   Future<void> logout() async {

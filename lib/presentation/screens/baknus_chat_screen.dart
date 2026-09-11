@@ -40,6 +40,11 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import '../../core/utils/format_helper.dart';
 import '../../data/models/jamendo_music.dart';
 import '../widgets/jamendo_music_picker_dialog.dart';
+import '../../data/models/class_attendance_model.dart';
+import '../../data/services/attendance_service.dart';
+import '../widgets/presensi_bot_bubble_widget.dart';
+import '../../data/models/teacher_attendance_model.dart';
+import '../widgets/teacher_attendance_bubble_widget.dart';
 
 class BaknusChatScreen extends StatefulWidget {
   final String? initialDirectPeerEmail;
@@ -71,11 +76,26 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
   CustomGroup? _activeCustomGroup;
   int _selectedMainTabIndex = 0; // 0: Japri, 1: Grup, 2: Status
 
+  // Multi-Selection State & Quick Filter (WhatsApp Style with Pink Signature)
+  final Set<String> _selectedChatKeys = {};
+  int _activeQuickFilter = 0; // 0: Semua, 1: Belum Dibaca, 2: Grup, 3: Status
+  bool _isViewingArchived = false; // State tampilan obrolan yang diarsipkan
+
+  // BaknusChat Signature Pink Color Palette (Ciri Khas Pink BaknusChat)
+  static const Color _pinkPrimary = Color(0xFFE11D48); // Rose Pink Utama
+  static const Color _pinkAccent = Color(0xFFFB7185); // Pink Cerah untuk Dark Mode
+  static const Color _pinkSelectedLight = Color(0xFFFFE4E6); // Highlight Seleksi Tema Terang
+  static const Color _pinkSelectedDark = Color(0xFF3B0813); // Highlight Seleksi Tema Gelap (Wine Rose)
+  static const Color _pinkChipDark = Color(0xFF4C0519); // Background Filter Chip Aktif Tema Gelap
+
   // State untuk BaknusChat Web QR pairing
   String? _webSessionId;
   BaknusWebSession? _authenticatedWebSession;
 
   Map<String, dynamic>? _liveMailboxData;
+  final AttendanceService _attendanceService = AttendanceService();
+  bool _showPresensiSuggestion = false;
+  List<ClassItem>? _cachedClasses;
   bool _isSending = false;
   String _searchFilter = '';
   int _messageLimit = 50;
@@ -223,6 +243,23 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
     final auth = context.read<AuthProvider>();
     final email = auth.currentUser?.email ?? '';
     final name = auth.currentUser?.displayName ?? '';
+
+    // Deteksi Mention @presensi & @hadir untuk Guru & TU
+    final clean = text.toLowerCase().trim();
+    final isMention = clean.startsWith('@') || clean.contains('@presensi') || clean.contains('@hadir');
+    final role = UserTagResolver.resolve(
+      email: email,
+      displayName: name,
+      mailboxData: _liveMailboxData,
+    );
+    final isStaff = role == 'Guru' || role == 'TU' || role == 'Admin';
+    final shouldShow = isMention && isStaff;
+    if (_showPresensiSuggestion != shouldShow) {
+      setState(() {
+        _showPresensiSuggestion = shouldShow;
+      });
+    }
+
     if (email.isEmpty || _activeDirectPeerEmail == null) return;
     final roomId = ChatService.getPrivateRoomId(email, _activeDirectPeerEmail!);
 
@@ -510,6 +547,42 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
       return;
     }
 
+    // Deteksi jika pesan merupakan perintah bot @hadir (Guru & TU Hadir Hari Ini)
+    if (text.toLowerCase().trim() == '@hadir' || text.toLowerCase().startsWith('@hadir')) {
+      setState(() {
+        _showPresensiSuggestion = false;
+      });
+      await _handleHadirCommand(
+        targetRoomId: targetRoomId,
+        commandText: text,
+        senderEmail: senderEmail,
+        senderName: senderName,
+        senderTag: senderTag,
+        recipientEmail: rEmail,
+        recipientName: rName,
+        recipientTag: rTag,
+      );
+      return;
+    }
+
+    // Deteksi jika pesan merupakan perintah bot @presensi
+    if (text.toLowerCase().startsWith('@presensi')) {
+      setState(() {
+        _showPresensiSuggestion = false;
+      });
+      await _handlePresensiCommand(
+        targetRoomId: targetRoomId,
+        commandText: text,
+        senderEmail: senderEmail,
+        senderName: senderName,
+        senderTag: senderTag,
+        recipientEmail: rEmail,
+        recipientName: rName,
+        recipientTag: rTag,
+      );
+      return;
+    }
+
     setState(() => _isSending = true);
     _textController.clear();
 
@@ -551,6 +624,519 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
         setState(() => _isSending = false);
       }
     }
+  }
+
+  // ==================== BOT KEHADIRAN GURU & TU (@HADIR) DISPATCHER ====================
+
+  Future<void> _handleHadirCommand({
+    required String targetRoomId,
+    required String commandText,
+    required String senderEmail,
+    required String senderName,
+    required String senderTag,
+    String? recipientEmail,
+    String? recipientName,
+    String? recipientTag,
+  }) async {
+    final cleanCommand = commandText.trim();
+    final role = UserTagResolver.resolve(
+      email: senderEmail,
+      displayName: senderName,
+      fallbackRole: senderTag,
+      mailboxData: _liveMailboxData,
+    );
+
+    // 1. Kirim pesan prompt asli pengguna (@hadir) ke chat
+    setState(() => _isSending = true);
+    _textController.clear();
+
+    try {
+      await _chatService.sendMessage(
+        roomId: targetRoomId,
+        text: cleanCommand,
+        senderEmail: senderEmail,
+        senderName: senderName,
+        senderRole: senderTag,
+        recipientEmail: recipientEmail,
+        recipientName: recipientName,
+        recipientTag: recipientTag,
+      );
+
+      // 2. Proteksi Hak Akses Role: Jika Siswa, tolak dengan ramah
+      if (role != 'Guru' && role != 'TU' && role != 'Admin') {
+        await Future.delayed(const Duration(milliseconds: 300));
+        await _chatService.sendMessage(
+          roomId: targetRoomId,
+          text: '⚠️ Akses ditolak: Fitur @hadir hanya dapat diakses oleh Guru dan Staf TU.',
+          senderEmail: 'bot.presensi@smkbn666.sch.id',
+          senderName: 'BaknusAttend Bot',
+          senderRole: 'TU',
+          recipientEmail: recipientEmail,
+          recipientName: recipientName,
+          recipientTag: recipientTag,
+        );
+        _scrollToBottom();
+        return;
+      }
+
+      // 3. Panggil API presence/teachers-today
+      try {
+        final summary = await _attendanceService.getTodayTeachersAttendance();
+
+        await Future.delayed(const Duration(milliseconds: 350));
+        await _chatService.sendMessage(
+          roomId: targetRoomId,
+          text: '👨‍🏫 Kehadiran Guru & TU: ${summary.date} • ${summary.totalHadir} Orang Hadir',
+          senderEmail: 'bot.presensi@smkbn666.sch.id',
+          senderName: 'BaknusAttend Bot',
+          senderRole: 'TU',
+          type: 'teachers_presence_bot',
+          metadata: summary.toRawJson(),
+          recipientEmail: recipientEmail,
+          recipientName: recipientName,
+          recipientTag: recipientTag,
+        );
+      } catch (e) {
+        String errText = 'Gagal memuat data kehadiran: $e';
+        if (e is AttendanceException) {
+          errText = e.message;
+        }
+        await _chatService.sendMessage(
+          roomId: targetRoomId,
+          text: '⚠️ $errText',
+          senderEmail: 'bot.presensi@smkbn666.sch.id',
+          senderName: 'BaknusAttend Bot',
+          senderRole: 'TU',
+          recipientEmail: recipientEmail,
+          recipientName: recipientName,
+          recipientTag: recipientTag,
+        );
+      }
+
+      _scrollToBottom();
+    } catch (e) {
+      debugPrint('Error handling @hadir command: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Terjadi kendala memproses perintah: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSending = false);
+      }
+    }
+  }
+
+  // ==================== PRESENSI BOT CHAT DISPATCHER ====================
+
+  Future<void> _handlePresensiCommand({
+    required String targetRoomId,
+    required String commandText,
+    required String senderEmail,
+    required String senderName,
+    required String senderTag,
+    String? recipientEmail,
+    String? recipientName,
+    String? recipientTag,
+  }) async {
+    final cleanCommand = commandText.trim();
+    final role = UserTagResolver.resolve(
+      email: senderEmail,
+      displayName: senderName,
+      fallbackRole: senderTag,
+      mailboxData: _liveMailboxData,
+    );
+
+    // 1. Kirim pesan prompt asli pengguna ke ruang obrolan
+    setState(() => _isSending = true);
+    _textController.clear();
+
+    try {
+      await _chatService.sendMessage(
+        roomId: targetRoomId,
+        text: cleanCommand,
+        senderEmail: senderEmail,
+        senderName: senderName,
+        senderRole: senderTag,
+        recipientEmail: recipientEmail,
+        recipientName: recipientName,
+        recipientTag: recipientTag,
+      );
+
+      // 2. Proteksi Hak Akses Role: Jika Siswa, tolak dengan ramah
+      if (role != 'Guru' && role != 'TU' && role != 'Admin') {
+        await Future.delayed(const Duration(milliseconds: 300));
+        await _chatService.sendMessage(
+          roomId: targetRoomId,
+          text: '⚠️ Akses ditolak: Data kehadiran kelas hanya dapat diakses oleh Guru dan Staf TU.',
+          senderEmail: 'bot.presensi@smkbn666.sch.id',
+          senderName: 'BaknusAttend Bot',
+          senderRole: 'TU',
+          recipientEmail: recipientEmail,
+          recipientName: recipientName,
+          recipientTag: recipientTag,
+        );
+        _scrollToBottom();
+        return;
+      }
+
+      // 3. Cek parameter kelas setelah kata '@presensi'
+      final classParam = cleanCommand.length > 9
+          ? cleanCommand.substring(9).trim()
+          : '';
+
+      if (classParam.isEmpty) {
+        // Mode A: Guru hanya mengetik "@presensi" -> Tampilkan pilihan kelas
+        List<ClassItem> classes = _cachedClasses ?? [];
+        if (classes.isEmpty) {
+          try {
+            classes = await _attendanceService.getClasses();
+            _cachedClasses = classes;
+          } catch (e) {
+            debugPrint('Error loading classes: $e');
+          }
+        }
+
+        await Future.delayed(const Duration(milliseconds: 350));
+        await _chatService.sendMessage(
+          roomId: targetRoomId,
+          text: '📋 Pilih Kelas Presensi\nSilakan ketuk salah satu kelas di bawah untuk memuat data kehadiran hari ini:',
+          senderEmail: 'bot.presensi@smkbn666.sch.id',
+          senderName: 'BaknusAttend Bot',
+          senderRole: 'TU',
+          type: 'presensi_classes',
+          metadata: jsonEncode(classes.map((c) => c.toJson()).toList()),
+          recipientEmail: recipientEmail,
+          recipientName: recipientName,
+          recipientTag: recipientTag,
+        );
+      } else {
+        // Mode B: Guru mengetik "@presensi [Nama Kelas]" -> Muat data kehadiran kelas
+        await _fetchAndSendClassAttendance(
+          targetRoomId: targetRoomId,
+          classNameOrId: classParam,
+          senderEmail: senderEmail,
+          senderName: senderName,
+          recipientEmail: recipientEmail,
+          recipientName: recipientName,
+          recipientTag: recipientTag,
+        );
+      }
+      _scrollToBottom();
+    } catch (e) {
+      debugPrint('Error handling @presensi command: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Terjadi kendala memproses perintah: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSending = false);
+      }
+    }
+  }
+
+  Future<void> _fetchAndSendClassAttendance({
+    required String targetRoomId,
+    required String classNameOrId,
+    required String senderEmail,
+    required String senderName,
+    String? recipientEmail,
+    String? recipientName,
+    String? recipientTag,
+  }) async {
+    try {
+      final summary = await _attendanceService.getTodayClassAttendance(classId: classNameOrId);
+
+      await _chatService.sendMessage(
+        roomId: targetRoomId,
+        text: '📊 Rekap Kehadiran: ${summary.className}\n'
+            'Tanggal: ${summary.date} • Total: ${summary.totalSiswa} | Hadir: ${summary.totalHadir} | Belum: ${summary.totalBelumHadir} (${summary.persentaseKehadiran})',
+        senderEmail: 'bot.presensi@smkbn666.sch.id',
+        senderName: 'BaknusAttend Bot',
+        senderRole: 'TU',
+        type: 'presensi_bot',
+        metadata: summary.toRawJson(),
+        recipientEmail: recipientEmail,
+        recipientName: recipientName,
+        recipientTag: recipientTag,
+      );
+    } catch (e) {
+      String errText = 'Gagal memuat data kehadiran: $e';
+      if (e is AttendanceException) {
+        errText = e.message;
+      }
+      await _chatService.sendMessage(
+        roomId: targetRoomId,
+        text: '⚠️ $errText',
+        senderEmail: 'bot.presensi@smkbn666.sch.id',
+        senderName: 'BaknusAttend Bot',
+        senderRole: 'TU',
+        recipientEmail: recipientEmail,
+        recipientName: recipientName,
+        recipientTag: recipientTag,
+      );
+    }
+  }
+
+  void _onPresensiClassSelected(ClassItem item, String currentEmail) {
+    final targetRoomId = _activeCustomGroup != null
+        ? _activeCustomGroup!.id
+        : (_activeDirectPeerEmail != null
+            ? ChatService.getPrivateRoomId(currentEmail, _activeDirectPeerEmail!)
+            : '');
+    if (targetRoomId.isEmpty) return;
+
+    final auth = context.read<AuthProvider>();
+    final name = auth.currentUser?.displayName ?? currentEmail.split('@').first;
+
+    _fetchAndSendClassAttendance(
+      targetRoomId: targetRoomId,
+      classNameOrId: item.id.toString(),
+      senderEmail: currentEmail,
+      senderName: name,
+      recipientEmail: _activeDirectPeerEmail,
+      recipientName: _activeDirectPeerName,
+      recipientTag: _activeDirectPeerTag,
+    );
+  }
+
+  Widget _buildPresensiSuggestionBar({
+    required bool isDark,
+    required String senderEmail,
+    required String senderName,
+    required String senderTag,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E1E2E) : const Color(0xFFF8FAFC),
+        border: Border(
+          top: BorderSide(
+            color: isDark ? Colors.white12 : const Color(0xFFE2E8F0),
+            width: 1,
+          ),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.smart_toy_rounded, size: 14, color: Color(0xFF2563EB)),
+              const SizedBox(width: 6),
+              Text(
+                'Perintah Bot Kehadiran (Guru & TU):',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => setState(() => _showPresensiSuggestion = false),
+                child: Padding(
+                  padding: const EdgeInsets.all(2.0),
+                  child: Icon(
+                    Icons.close_rounded,
+                    size: 16,
+                    color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                // Chip 1: @hadir (Guru & TU Hadir Hari Ini)
+                ActionChip(
+                  avatar: const Icon(Icons.badge_rounded, size: 14, color: Colors.white),
+                  label: const Text(
+                    '@hadir (Guru & TU Hadir)',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  backgroundColor: const Color(0xFF2563EB),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  onPressed: () {
+                    setState(() => _showPresensiSuggestion = false);
+                    _textController.text = '@hadir';
+                    _handleSendMessage(
+                      senderEmail: senderEmail,
+                      senderName: senderName,
+                      senderTag: senderTag,
+                    );
+                  },
+                ),
+                const SizedBox(width: 8),
+                // Chip 2: @presensi (Pilih Kelas Siswa)
+                ActionChip(
+                  avatar: const Icon(Icons.analytics_rounded, size: 14, color: Colors.white),
+                  label: const Text(
+                    '@presensi (Pilih Kelas Siswa)',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                  ),
+                  backgroundColor: const Color(0xFFE11D48),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  onPressed: () {
+                    setState(() => _showPresensiSuggestion = false);
+                    _showClassPickerBottomSheet(
+                      senderEmail: senderEmail,
+                      senderName: senderName,
+                      senderTag: senderTag,
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showClassPickerBottomSheet({
+    required String senderEmail,
+    required String senderName,
+    required String senderTag,
+  }) async {
+    List<ClassItem> classes = _cachedClasses ?? [];
+    if (classes.isEmpty) {
+      try {
+        classes = await _attendanceService.getClasses();
+        _cachedClasses = classes;
+      } catch (e) {
+        debugPrint('Error getting classes: $e');
+      }
+    }
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        return SafeArea(
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(ctx).size.height * 0.65,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade400,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE11D48).withValues(alpha: 0.15),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.school_rounded, color: Color(0xFFE11D48), size: 20),
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Pilih Kelas untuk Presensi',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                              color: Color(0xFFE11D48),
+                            ),
+                          ),
+                          Text(
+                            'Rekap kehadiran siswa hari ini akan dikirim ke chat',
+                            style: TextStyle(fontSize: 11, color: Colors.grey),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Expanded(
+                  child: GridView.builder(
+                    physics: const BouncingScrollPhysics(),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2,
+                      childAspectRatio: 2.6,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 10,
+                    ),
+                    itemCount: classes.length,
+                    itemBuilder: (context, idx) {
+                      final c = classes[idx];
+                      return InkWell(
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _textController.text = '@presensi ${c.name}';
+                          _handleSendMessage(
+                            senderEmail: senderEmail,
+                            senderName: senderName,
+                            senderTag: senderTag,
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: isDark ? const Color(0xFF2B1420) : const Color(0xFFFFF1F2),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFFB7185).withValues(alpha: 0.5)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.people_alt_rounded, size: 16, color: Color(0xFFE11D48)),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  c.name,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _handlePickAndSendFile({
@@ -1410,185 +1996,283 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
 
     final isInsideRoom = _activeDirectPeerEmail != null || _activeCustomGroup != null;
 
-    return AppBackground(
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: _activeCustomGroup != null
-            ? _buildGroupChatAppBar(isDark)
-            : (_activeDirectPeerEmail != null
-                ? _buildDirectChatAppBar(isDark, userEmail)
-                : _buildStandardAppBar(isDark, userTag, userEmail)),
-        body: Column(
-          children: [
-            // ==================== 1. 24-HOUR NOTICE STRIP ====================
-            _build24HourNoticeStrip(isDark),
+    return PopScope(
+      canPop: !isInsideRoom && !_isViewingArchived && _selectedChatKeys.isEmpty,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        if (_selectedChatKeys.isNotEmpty) {
+          setState(() => _selectedChatKeys.clear());
+        } else if (_isViewingArchived) {
+          setState(() => _isViewingArchived = false);
+        } else if (_activeDirectPeerEmail != null) {
+          setState(() {
+            _activeDirectPeerEmail = null;
+            _activeDirectPeerName = null;
+            _activeDirectPeerTag = null;
+          });
+        } else if (_activeCustomGroup != null) {
+          setState(() {
+            _activeCustomGroup = null;
+          });
+        }
+      },
+      child: AppBackground(
+        child: Scaffold(
+          backgroundColor: (isDark && !isInsideRoom)
+              ? const Color(0xFF0B141A)
+              : (isInsideRoom ? Colors.transparent : Colors.white),
+          appBar: _activeCustomGroup != null
+              ? _buildGroupChatAppBar(isDark)
+              : (_activeDirectPeerEmail != null
+                  ? _buildDirectChatAppBar(isDark, userEmail)
+                  : (_isViewingArchived
+                      ? _buildArchivedAppBar(isDark, userEmail)
+                      : _buildStandardAppBar(isDark, userTag, userEmail))),
+          body: _isViewingArchived
+              ? _buildArchivedConversationsView(userEmail, isDark)
+              : Column(
+                  children: [
+                    // WhatsApp Header (Search Pill & Filter Chips) saat di halaman beranda
+                    if (!isInsideRoom) ...[
+                      _buildWhatsAppSearchBar(isDark),
+                      _buildWhatsAppFilterChips(isDark),
+                    ],
 
-            // ==================== 2. TAB NAVIGASI UTAMA (Japri, Grup, Status) ====================
-            if (!isInsideRoom) _buildMainTabSegmentedBar(isDark),
-
-            // ==================== 3. CHAT CONTENT BERDASARKAN TAB ====================
-            Expanded(
-              child: isInsideRoom
-                  ? _buildMessagesStream(userEmail, isDark)
-                  : (_selectedMainTabIndex == 0
-                      ? _buildDirectConversationsList(userEmail, isDark)
-                      : (_selectedMainTabIndex == 1
-                          ? _buildGroupsListTab(userEmail, isDark)
-                          : _buildStatusTabFullView(
-                              currentEmail: userEmail,
-                              currentName: rawDisplayName,
-                              currentTag: userTag,
-                              isDark: isDark,
-                            ))),
-            ),
-
-            // ==================== 4. INPUT BAR (HANYA SAAT DALAM ROOM CHAT) ====================
-            if (isInsideRoom)
-              _buildInputBar(
-                isDark: isDark,
-                senderEmail: userEmail,
-                senderName: rawDisplayName,
-                senderTag: userTag,
-              ),
-          ],
-        ),
-        floatingActionButton: !isInsideRoom
-            ? (_selectedMainTabIndex == 0
-                ? FloatingActionButton.extended(
-                    backgroundColor: const Color(0xFFE11D48),
-                    foregroundColor: Colors.white,
-                    elevation: 3,
-                    icon: const Icon(Icons.person_add_alt_1_rounded, size: 20),
-                    label: const Text(
-                      'Mulai Japri',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                    // CHAT CONTENT BERDASARKAN TAB
+                    Expanded(
+                      child: isInsideRoom
+                          ? _buildMessagesStream(userEmail, isDark)
+                          : (_selectedMainTabIndex == 0
+                              ? _buildDirectConversationsList(userEmail, isDark)
+                              : (_selectedMainTabIndex == 1
+                                  ? _buildGroupsListTab(userEmail, isDark)
+                                  : _buildStatusTabFullView(
+                                      currentEmail: userEmail,
+                                      currentName: rawDisplayName,
+                                      currentTag: userTag,
+                                      isDark: isDark,
+                                    ))),
                     ),
-                    onPressed: () => _showNewDirectChatModal(context, userEmail),
-                  )
-                : (_selectedMainTabIndex == 1
-                    ? FloatingActionButton.extended(
-                        backgroundColor: const Color(0xFFE11D48),
-                        foregroundColor: Colors.white,
-                        elevation: 3,
-                        icon: const Icon(Icons.group_add_rounded, size: 20),
-                        label: const Text(
-                          'Buat Grup Baru',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
-                        ),
-                        onPressed: () {
-                          CreateGroupDialog.show(
-                            context,
-                            onGroupCreated: () => setState(() {}),
-                          );
-                        },
-                      )
-                    : FloatingActionButton.extended(
-                        backgroundColor: const Color(0xFFE11D48),
-                        foregroundColor: Colors.white,
-                        elevation: 3,
-                        icon: const Icon(Icons.add_a_photo_rounded, size: 20),
-                        label: const Text(
-                          'Status Baru',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
-                        ),
-                        onPressed: () => _showCreateStoryModal(
-                          currentEmail: userEmail,
-                          currentName: rawDisplayName,
-                          currentTag: userTag,
-                        ),
-                      )))
-            : null,
+
+                    // INPUT BAR (HANYA SAAT DALAM ROOM CHAT)
+                    if (isInsideRoom)
+                      _buildInputBar(
+                        isDark: isDark,
+                        senderEmail: userEmail,
+                        senderName: rawDisplayName,
+                        senderTag: userTag,
+                      ),
+                  ],
+                ),
+          floatingActionButton: (!isInsideRoom && !_isViewingArchived && _selectedChatKeys.isEmpty)
+              ? FloatingActionButton(
+                  backgroundColor: _pinkPrimary,
+                  foregroundColor: Colors.white,
+                  elevation: 4,
+                  shape: const CircleBorder(),
+                  onPressed: () {
+                    if (_selectedMainTabIndex == 0) {
+                      _showNewDirectChatModal(context, userEmail);
+                    } else if (_selectedMainTabIndex == 1) {
+                      CreateGroupDialog.show(
+                        context,
+                        onGroupCreated: () => setState(() {}),
+                      );
+                    } else {
+                      _showCreateStoryModal(
+                        currentEmail: userEmail,
+                        currentName: rawDisplayName,
+                        currentTag: userTag,
+                      );
+                    }
+                  },
+                  child: Icon(
+                    _selectedMainTabIndex == 0
+                        ? Icons.chat_rounded
+                        : (_selectedMainTabIndex == 1
+                            ? Icons.group_add_rounded
+                            : Icons.add_a_photo_rounded),
+                    size: 24,
+                  ),
+                )
+              : null,
+        ),
       ),
     );
   }
 
-  Widget _buildMainTabSegmentedBar(bool isDark) {
+  Widget _buildWhatsAppSearchBar(bool isDark) {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-      padding: const EdgeInsets.all(3),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
       decoration: BoxDecoration(
-        color: isDark ? AppColors.darkSurfaceElevated : Colors.grey.shade200,
-        borderRadius: BorderRadius.circular(14),
+        color: isDark ? const Color(0xFF202C33) : const Color(0xFFF1F5F9),
+        borderRadius: BorderRadius.circular(24),
+        border: isDark ? null : Border.all(color: const Color(0xFFE2E8F0)),
       ),
       child: Row(
         children: [
-          _buildTabSegmentItem(
-            index: 0,
-            icon: Icons.chat_bubble_rounded,
-            label: 'Japri',
-            isDark: isDark,
+          Icon(
+            Icons.search_rounded,
+            size: 20,
+            color: isDark ? _pinkAccent : _pinkPrimary,
           ),
-          _buildTabSegmentItem(
-            index: 1,
-            icon: Icons.groups_rounded,
-            label: 'Grup',
-            isDark: isDark,
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: _filterController,
+              style: TextStyle(
+                fontSize: 14,
+                color: isDark ? const Color(0xFFE9EDEF) : const Color(0xFF0F172A),
+              ),
+              decoration: InputDecoration(
+                hintText: 'Ask BaknusAI or Search',
+                hintStyle: TextStyle(
+                  fontSize: 13.5,
+                  color: isDark ? const Color(0xFF8696A0) : const Color(0xFF64748B),
+                ),
+                border: InputBorder.none,
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(vertical: 8),
+              ),
+              onChanged: (val) => setState(() => _searchFilter = val.trim().toLowerCase()),
+            ),
           ),
-          _buildTabSegmentItem(
-            index: 2,
-            icon: Icons.circle_notifications_rounded,
-            label: 'Status',
-            isDark: isDark,
-          ),
+          if (_searchFilter.isNotEmpty)
+            GestureDetector(
+              onTap: () {
+                _filterController.clear();
+                setState(() => _searchFilter = '');
+              },
+              child: Icon(
+                Icons.close_rounded,
+                size: 18,
+                color: isDark ? const Color(0xFF8696A0) : const Color(0xFF64748B),
+              ),
+            ),
         ],
       ),
     );
   }
 
-  Widget _buildTabSegmentItem({
-    required int index,
-    required IconData icon,
-    required String label,
-    required bool isDark,
-  }) {
-    final isSelected = _selectedMainTabIndex == index;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () {
-          setState(() {
-            _selectedMainTabIndex = index;
-          });
-        },
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: isSelected
-                ? (isDark ? AppColors.darkSurface : Colors.white)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(11),
-            boxShadow: isSelected
-                ? [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.06),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ]
-                : null,
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                icon,
-                size: 15,
+  Widget _buildWhatsAppFilterChips(bool isDark) {
+    final filters = [
+      {'label': 'Semua', 'index': 0},
+      {'label': 'Belum Dibaca', 'index': 1},
+      {'label': 'Grup', 'index': 2},
+      {'label': 'Status', 'index': 3},
+    ];
+
+    return Container(
+      height: 38,
+      margin: const EdgeInsets.only(bottom: 6),
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        scrollDirection: Axis.horizontal,
+        itemCount: filters.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, idx) {
+          final filter = filters[idx];
+          final filterIndex = filter['index'] as int;
+          final isSelected = _activeQuickFilter == filterIndex;
+
+          return GestureDetector(
+            onTap: () {
+              setState(() {
+                _activeQuickFilter = filterIndex;
+                if (filterIndex == 0 || filterIndex == 1) {
+                  _selectedMainTabIndex = 0;
+                } else if (filterIndex == 2) {
+                  _selectedMainTabIndex = 1;
+                } else if (filterIndex == 3) {
+                  _selectedMainTabIndex = 2;
+                }
+              });
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
                 color: isSelected
-                    ? const Color(0xFFE11D48)
-                    : (isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted),
+                    ? (isDark ? _pinkChipDark : _pinkSelectedLight)
+                    : (isDark ? const Color(0xFF202C33) : const Color(0xFFF1F5F9)),
+                borderRadius: BorderRadius.circular(18),
+                border: isSelected
+                    ? Border.all(
+                        color: isDark
+                            ? _pinkPrimary.withValues(alpha: 0.6)
+                            : _pinkPrimary.withValues(alpha: 0.4),
+                        width: 1,
+                      )
+                    : (isDark ? null : Border.all(color: const Color(0xFFE2E8F0))),
               ),
-              const SizedBox(width: 5),
-              Text(
-                label,
+              child: Text(
+                filter['label'] as String,
                 style: TextStyle(
                   fontSize: 12.5,
                   fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
                   color: isSelected
-                      ? (isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary)
-                      : (isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted),
+                      ? (isDark ? _pinkAccent : _pinkPrimary)
+                      : (isDark ? const Color(0xFF8696A0) : const Color(0xFF64748B)),
                 ),
               ),
-            ],
-          ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildArchivedRow(bool isDark, int archivedCount) {
+    return InkWell(
+      onTap: () {
+        setState(() {
+          _isViewingArchived = true;
+          _selectedChatKeys.clear();
+        });
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+        child: Row(
+          children: [
+            Icon(
+              Icons.archive_outlined,
+              size: 22,
+              color: isDark ? _pinkAccent : _pinkPrimary,
+            ),
+            const SizedBox(width: 24),
+            Expanded(
+              child: Text(
+                'Archived',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: isDark ? const Color(0xFFE9EDEF) : const Color(0xFF0F172A),
+                ),
+              ),
+            ),
+            if (archivedCount > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isDark ? _pinkChipDark : _pinkSelectedLight,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isDark
+                        ? _pinkPrimary.withValues(alpha: 0.5)
+                        : _pinkPrimary.withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Text(
+                  '$archivedCount',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? _pinkAccent : _pinkPrimary,
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -1771,80 +2455,314 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
     );
   }
 
+  void _handlePinSelected(String currentEmail) async {
+    final keys = _selectedChatKeys.toList();
+    setState(() => _selectedChatKeys.clear());
+    for (final key in keys) {
+      await _chatService.togglePinConversation(
+        userEmail: currentEmail,
+        peerEmail: key,
+        isPinned: true,
+      );
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${keys.length} obrolan disematkan.'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: _pinkPrimary,
+        ),
+      );
+    }
+  }
+
+  void _handleDeleteSelected(String currentEmail) async {
+    final keys = _selectedChatKeys.toList();
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1F2C34),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(
+          'Hapus ${keys.length} percakapan terpilih?',
+          style: const TextStyle(color: Color(0xFFE9EDEF), fontSize: 17, fontWeight: FontWeight.bold),
+        ),
+        content: const Text(
+          'Pesan dari percakapan yang dipilih akan dihapus secara permanen.',
+          style: TextStyle(color: Color(0xFF8696A0), fontSize: 13.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Batal', style: TextStyle(color: _pinkPrimary)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE11D48),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Hapus'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      setState(() => _selectedChatKeys.clear());
+      for (final key in keys) {
+        await _chatService.deleteDirectConversation(
+          currentEmail: currentEmail,
+          peerEmail: key,
+        );
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${keys.length} obrolan dihapus.'),
+            behavior: SnackBarBehavior.floating,
+            backgroundColor: const Color(0xFFE11D48),
+          ),
+        );
+      }
+    }
+  }
+
+  void _handleMuteSelected() {
+    final count = _selectedChatKeys.length;
+    setState(() => _selectedChatKeys.clear());
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Notifikasi untuk $count obrolan telah dibisukan.'),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: _pinkPrimary,
+      ),
+    );
+  }
+
+  void _handleArchiveSelected(String currentEmail) async {
+    final keys = _selectedChatKeys.toList();
+    setState(() => _selectedChatKeys.clear());
+    for (final key in keys) {
+      await _chatService.toggleArchiveConversation(
+        userEmail: currentEmail,
+        peerEmail: key,
+        isArchived: true,
+      );
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${keys.length} obrolan telah diarsipkan.'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: _pinkPrimary,
+        ),
+      );
+    }
+  }
+
+  void _handleUnarchiveSelected(String currentEmail) async {
+    final keys = _selectedChatKeys.toList();
+    setState(() => _selectedChatKeys.clear());
+    for (final key in keys) {
+      await _chatService.toggleArchiveConversation(
+        userEmail: currentEmail,
+        peerEmail: key,
+        isArchived: false,
+      );
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${keys.length} obrolan telah dibuka dari arsip.'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: _pinkPrimary,
+        ),
+      );
+    }
+  }
+
+  PreferredSizeWidget _buildArchivedAppBar(bool isDark, String userEmail) {
+    if (_selectedChatKeys.isNotEmpty) {
+      return AppBar(
+        backgroundColor: isDark ? _pinkSelectedDark : _pinkPrimary,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          tooltip: 'Batal pilihan',
+          onPressed: () => setState(() => _selectedChatKeys.clear()),
+        ),
+        titleSpacing: 0,
+        title: Text(
+          '${_selectedChatKeys.length}',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.unarchive_outlined, color: Colors.white),
+            tooltip: 'Buka arsip',
+            onPressed: () => _handleUnarchiveSelected(userEmail),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_rounded, color: Colors.white),
+            tooltip: 'Hapus',
+            onPressed: () => _handleDeleteSelected(userEmail),
+          ),
+        ],
+      );
+    }
+
+    return AppBar(
+      backgroundColor: isDark ? const Color(0xFF0B141A) : Colors.white,
+      elevation: 0,
+      leading: IconButton(
+        icon: Icon(
+          Icons.arrow_back_rounded,
+          color: isDark ? const Color(0xFFE9EDEF) : const Color(0xFF0F172A),
+        ),
+        tooltip: 'Kembali',
+        onPressed: () => setState(() {
+          _isViewingArchived = false;
+          _selectedChatKeys.clear();
+        }),
+      ),
+      title: Text(
+        'Archived',
+        style: TextStyle(
+          color: isDark ? const Color(0xFFE9EDEF) : const Color(0xFF0F172A),
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+
   PreferredSizeWidget _buildStandardAppBar(bool isDark, String userTag, String userEmail) {
-    final tagColor = UserTagResolver.getTagColor(userTag);
+    // 1. Tampilan Mode Multi-Select (Tema Khas Pink BaknusChat)
+    if (_selectedChatKeys.isNotEmpty) {
+      return AppBar(
+        backgroundColor: isDark ? _pinkSelectedDark : _pinkPrimary,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
+          tooltip: 'Batal pilihan',
+          onPressed: () => setState(() => _selectedChatKeys.clear()),
+        ),
+        titleSpacing: 0,
+        title: Text(
+          '${_selectedChatKeys.length}',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.push_pin_rounded, color: Colors.white),
+            tooltip: 'Sematkan',
+            onPressed: () => _handlePinSelected(userEmail),
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_rounded, color: Colors.white),
+            tooltip: 'Hapus',
+            onPressed: () => _handleDeleteSelected(userEmail),
+          ),
+          IconButton(
+            icon: const Icon(Icons.volume_off_rounded, color: Colors.white),
+            tooltip: 'Bisukan',
+            onPressed: _handleMuteSelected,
+          ),
+          IconButton(
+            icon: const Icon(Icons.archive_outlined, color: Colors.white),
+            tooltip: 'Arsipkan',
+            onPressed: () => _handleArchiveSelected(userEmail),
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert_rounded, color: Colors.white),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            color: isDark ? const Color(0xFF233138) : Colors.white,
+            onSelected: (val) {
+              if (val == 'clear') {
+                setState(() => _selectedChatKeys.clear());
+              } else if (val == 'archive') {
+                _handleArchiveSelected(userEmail);
+              } else if (val == 'options' && _selectedChatKeys.length == 1) {
+                final key = _selectedChatKeys.first;
+                setState(() => _selectedChatKeys.clear());
+                _showDirectConversationOptionsModal(
+                  context,
+                  currentEmail: userEmail,
+                  peerEmail: key,
+                  peerName: key.split('@').first,
+                );
+              }
+            },
+            itemBuilder: (ctx) => [
+              if (_selectedChatKeys.length == 1) ...[
+                PopupMenuItem(
+                  value: 'archive',
+                  child: Text('Arsipkan obrolan', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                ),
+                PopupMenuItem(
+                  value: 'options',
+                  child: Text('Opsi percakapan', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                ),
+              ],
+              PopupMenuItem(
+                value: 'clear',
+                child: Text('Batal pilih', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    // 2. Tampilan Mode Normal (Ciri Khas Pink BaknusChat)
     final auth = context.read<AuthProvider>();
     final rawDisplayName = auth.currentUser?.displayName.isNotEmpty == true
         ? auth.currentUser!.displayName
         : (userEmail.isNotEmpty ? userEmail.split('@').first : 'Pengguna');
 
     return AppBar(
-      backgroundColor: Colors.transparent,
+      backgroundColor: (isDark && _activeDirectPeerEmail == null && _activeCustomGroup == null)
+          ? const Color(0xFF0B141A)
+          : Colors.white,
       elevation: 0,
-      titleSpacing: 12,
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(7),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFFE11D48), Color(0xFFFB7185)],
-              ),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(Icons.chat_bubble_rounded, color: Colors.white, size: 18),
-          ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'BaknusChat',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                      decoration: BoxDecoration(
-                        color: tagColor.withValues(alpha: 0.2),
-                        borderRadius: BorderRadius.circular(5),
-                        border: Border.all(color: tagColor, width: 0.8),
-                      ),
-                      child: Text(
-                        userTag,
-                        style: TextStyle(
-                          color: tagColor,
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                Text(
-                  'Obrolan Resmi Sekolah',
-                  style: TextStyle(
-                    fontSize: 10.5,
-                    color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-        ],
+      titleSpacing: 16,
+      title: Text(
+        'BaknusChat',
+        style: TextStyle(
+          color: isDark ? _pinkAccent : _pinkPrimary,
+          fontSize: 22,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.3,
+        ),
       ),
       actions: [
         IconButton(
-          icon: const Icon(Icons.cloud_sync_rounded, color: Color(0xFF10B981)),
+          icon: Icon(
+            Icons.camera_alt_outlined,
+            color: isDark ? const Color(0xFF8696A0) : const Color(0xFF64748B),
+          ),
+          tooltip: 'Kamera / Status Baru',
+          onPressed: () => _showCreateStoryModal(
+            currentEmail: userEmail,
+            currentName: rawDisplayName,
+            currentTag: userTag,
+          ),
+        ),
+        IconButton(
+          icon: Icon(
+            Icons.cloud_sync_rounded,
+            color: isDark ? _pinkAccent : _pinkPrimary,
+          ),
           tooltip: 'Backup & Restore BaknusChat',
           onPressed: () {
             ChatBackupDialog.show(context, userEmail);
@@ -1853,10 +2771,11 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
         PopupMenuButton<String>(
           icon: Icon(
             Icons.more_vert_rounded,
-            color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+            color: isDark ? const Color(0xFF8696A0) : const Color(0xFF64748B),
           ),
           tooltip: 'Menu Opsi Chat',
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          color: isDark ? const Color(0xFF233138) : Colors.white,
           onSelected: (value) {
             if (value == 'starred') {
               StarredMessagesDialog.show(
@@ -1881,43 +2800,43 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
             }
           },
           itemBuilder: (ctx) => [
-            const PopupMenuItem(
-              value: 'linked_devices',
-              child: Row(
-                children: [
-                  Icon(Icons.devices_rounded, color: Color(0xFF10B981), size: 20),
-                  SizedBox(width: 10),
-                  Text('Perangkat Tertaut'),
-                ],
-              ),
-            ),
-            const PopupMenuItem(
-              value: 'starred',
-              child: Row(
-                children: [
-                  Icon(Icons.star_rounded, color: Colors.amber, size: 20),
-                  SizedBox(width: 10),
-                  Text('Pesan Berbintang'),
-                ],
-              ),
-            ),
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'create_group',
               child: Row(
                 children: [
-                  Icon(Icons.group_add_rounded, color: Color(0xFFE11D48), size: 20),
-                  SizedBox(width: 10),
-                  Text('Buat Grup Baru'),
+                  const Icon(Icons.group_add_rounded, color: _pinkPrimary, size: 20),
+                  const SizedBox(width: 10),
+                  Text('Grup Baru', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
                 ],
               ),
             ),
-            const PopupMenuItem(
+            PopupMenuItem(
+              value: 'linked_devices',
+              child: Row(
+                children: [
+                  const Icon(Icons.devices_rounded, color: _pinkPrimary, size: 20),
+                  const SizedBox(width: 10),
+                  Text('Perangkat Tertaut (Web)', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                ],
+              ),
+            ),
+            PopupMenuItem(
+              value: 'starred',
+              child: Row(
+                children: [
+                  const Icon(Icons.star_rounded, color: Colors.amber, size: 20),
+                  const SizedBox(width: 10),
+                  Text('Pesan Berbintang', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
+                ],
+              ),
+            ),
+            PopupMenuItem(
               value: 'info',
               child: Row(
                 children: [
-                  Icon(Icons.info_outline_rounded, color: AppColors.primary, size: 20),
-                  SizedBox(width: 10),
-                  Text('Tata Tertib Obrolan'),
+                  const Icon(Icons.info_outline_rounded, color: _pinkPrimary, size: 20),
+                  const SizedBox(width: 10),
+                  Text('Tata Tertib Obrolan', style: TextStyle(color: isDark ? Colors.white : Colors.black87)),
                 ],
               ),
             ),
@@ -2152,193 +3071,147 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
     );
   }
 
-  Widget _build24HourNoticeStrip(bool isDark) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFFE11D48).withValues(alpha: isDark ? 0.12 : 0.08),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: const Color(0xFFE11D48).withValues(alpha: 0.25),
-        ),
-      ),
-      child: const Row(
-        children: [
-          Icon(
-            Icons.chat_bubble_outline_rounded,
-            size: 14,
-            color: Color(0xFFE11D48),
-          ),
-          SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Silahkan Chat dengan mematuhi tatakrama dan kebijakan etika yang berlaku',
-              style: TextStyle(
-                fontSize: 11,
-                color: Color(0xFFBE123C),
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildDirectConversationsList(String currentEmail, bool isDark) {
-    return Column(
-      children: [
-        // Search filter bar
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: isDark ? AppColors.darkSurface : Colors.white,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
-              ),
-            ),
-            child: TextField(
-              controller: _filterController,
-              decoration: InputDecoration(
-                hintText: 'Cari percakapan aktif...',
-                hintStyle: TextStyle(
-                  fontSize: 12.5,
-                  color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
-                ),
-                prefixIcon: const Icon(Icons.search_rounded, size: 18),
-                suffixIcon: _searchFilter.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear_rounded, size: 16),
-                        onPressed: () {
-                          _filterController.clear();
-                          setState(() => _searchFilter = '');
-                        },
-                      )
-                    : null,
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(vertical: 9),
-              ),
-              onChanged: (val) => setState(() => _searchFilter = val.trim().toLowerCase()),
-            ),
-          ),
-        ),
+    return StreamBuilder<List<DirectConversationItem>>(
+      stream: _chatService.getDirectConversationsStream(currentEmail),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator(color: _pinkPrimary));
+        }
 
-        Expanded(
-          child: StreamBuilder<List<DirectConversationItem>>(
-            stream: _chatService.getDirectConversationsStream(currentEmail),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
+        final list = snapshot.data ?? [];
+        final unarchivedList = list.where((item) => !item.isArchived).toList();
+        final archivedCount = list.where((item) => item.isArchived).length;
 
-              final list = snapshot.data ?? [];
-              final filtered = list.where((item) {
-                if (_searchFilter.isEmpty) return true;
-                return item.peerName.toLowerCase().contains(_searchFilter) ||
-                    item.peerEmail.toLowerCase().contains(_searchFilter) ||
-                    item.lastMessage.toLowerCase().contains(_searchFilter);
-              }).toList();
+        final filtered = unarchivedList.where((item) {
+          if (_activeQuickFilter == 1 && item.unreadCount <= 0) return false;
+          if (_searchFilter.isEmpty) return true;
+          return item.peerName.toLowerCase().contains(_searchFilter) ||
+              item.peerEmail.toLowerCase().contains(_searchFilter) ||
+              item.lastMessage.toLowerCase().contains(_searchFilter);
+        }).toList();
 
-              if (filtered.isEmpty) {
-                return Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(18),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE11D48).withValues(alpha: 0.1),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.chat_bubble_outline_rounded,
-                            size: 42,
-                            color: Color(0xFFE11D48),
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        Text(
-                          _searchFilter.isEmpty
-                              ? 'Belum Ada Obrolan'
-                              : 'Percakapan tidak ditemukan',
-                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14.5),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          _searchFilter.isEmpty
-                              ? 'Mulai obrolan 1-on-1 dengan guru, staff TU, atau siswa lain. Chat tersimpan secara permanen.'
-                              : 'Coba kata kunci lain atau mulai chat baru dengan kontak sekolah.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
-                            height: 1.4,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: const Color(0xFFE11D48),
-                            side: const BorderSide(color: Color(0xFFE11D48)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                          icon: const Icon(Icons.person_search_rounded, size: 16),
-                          label: const Text('Cari Kontak Sekolah'),
-                          onPressed: () => _showNewDirectChatModal(context, currentEmail),
-                        ),
-                      ],
+        final showArchivedRow = _selectedMainTabIndex == 0 && _searchFilter.isEmpty && _activeQuickFilter != 1;
+
+        if (filtered.isEmpty) {
+          return ListView(
+            padding: const EdgeInsets.only(bottom: 80),
+            children: [
+              if (showArchivedRow)
+                _buildArchivedRow(isDark, archivedCount),
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        color: _pinkPrimary.withValues(alpha: 0.12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.chat_bubble_outline_rounded,
+                        size: 42,
+                        color: _pinkPrimary,
+                      ),
                     ),
-                  ),
-                );
-              }
+                    const SizedBox(height: 14),
+                    Text(
+                      _searchFilter.isEmpty
+                          ? (_activeQuickFilter == 1 ? 'Tidak Ada Pesan Belum Dibaca' : 'Belum Ada Obrolan')
+                          : 'Percakapan tidak ditemukan',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: isDark ? const Color(0xFFE9EDEF) : const Color(0xFF0F172A),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _searchFilter.isEmpty
+                          ? 'Mulai obrolan baru dengan guru, staff TU, atau siswa lain.'
+                          : 'Coba kata kunci lain atau mulai chat baru dengan kontak sekolah.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: isDark ? const Color(0xFF8696A0) : const Color(0xFF64748B),
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _pinkPrimary,
+                        side: const BorderSide(color: _pinkPrimary),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                      ),
+                      icon: const Icon(Icons.person_search_rounded, size: 16),
+                      label: const Text('Cari Kontak Sekolah'),
+                      onPressed: () => _showNewDirectChatModal(context, currentEmail),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        }
 
-              return ListView.separated(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                itemCount: filtered.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (context, index) {
-                  final item = filtered[index];
-                  final tagColor = UserTagResolver.getTagColor(item.peerTag);
+        final totalItemCount = filtered.length + (showArchivedRow ? 1 : 0);
 
-                  return StreamBuilder<UserPresence>(
-                    stream: _chatService.getUserPresenceStream(item.peerEmail),
-                    builder: (context, presenceSnap) {
-                      final isOnline = presenceSnap.data?.isOnline ?? false;
+        return ListView.builder(
+          padding: const EdgeInsets.only(bottom: 80),
+          itemCount: totalItemCount,
+          itemBuilder: (context, index) {
+            if (showArchivedRow && index == 0) {
+              return _buildArchivedRow(isDark, archivedCount);
+            }
+            final itemIndex = showArchivedRow ? index - 1 : index;
+            final item = filtered[itemIndex];
+            final isSelected = _selectedChatKeys.contains(item.peerEmail);
 
-                      return InkWell(
-                        borderRadius: BorderRadius.circular(14),
-                        onTap: () {
-                          _openDirectChat(
-                            peerEmail: item.peerEmail,
-                            peerName: item.peerName,
-                            peerTag: item.peerTag,
-                          );
-                        },
-                        onLongPress: () {
-                          _showDirectConversationOptionsModal(
-                            context,
-                            currentEmail: currentEmail,
-                            peerEmail: item.peerEmail,
-                            peerName: item.peerName,
-                            isPinned: item.isPinned,
-                          );
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: isDark ? AppColors.darkSurface : Colors.white,
-                            borderRadius: BorderRadius.circular(14),
-                            border: Border.all(
-                              color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
-                            ),
-                          ),
+            return StreamBuilder<UserPresence>(
+              stream: _chatService.getUserPresenceStream(item.peerEmail),
+              builder: (context, presenceSnap) {
+                final isOnline = presenceSnap.data?.isOnline ?? false;
+
+                return Material(
+                  color: isSelected
+                      ? (isDark ? _pinkSelectedDark : _pinkSelectedLight)
+                      : Colors.transparent,
+                  child: InkWell(
+                    onTap: () {
+                      if (_selectedChatKeys.isNotEmpty) {
+                        HapticFeedback.selectionClick();
+                        setState(() {
+                          if (isSelected) {
+                            _selectedChatKeys.remove(item.peerEmail);
+                          } else {
+                            _selectedChatKeys.add(item.peerEmail);
+                          }
+                        });
+                      } else {
+                        _openDirectChat(
+                          peerEmail: item.peerEmail,
+                          peerName: item.peerName,
+                          peerTag: item.peerTag,
+                        );
+                      }
+                    },
+                    onLongPress: () {
+                      HapticFeedback.mediumImpact();
+                      setState(() {
+                        if (isSelected) {
+                          _selectedChatKeys.remove(item.peerEmail);
+                        } else {
+                          _selectedChatKeys.add(item.peerEmail);
+                        }
+                      });
+                    },
+                    child: Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                           child: Row(
                             children: [
                               Stack(
@@ -2346,27 +3219,51 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
                                   UserAvatar(
                                     email: item.peerEmail,
                                     name: item.peerName,
-                                    radius: 22,
+                                    radius: 26,
                                   ),
-                                  Positioned(
-                                    right: 0,
-                                    bottom: 0,
-                                    child: Container(
-                                      width: 12,
-                                      height: 12,
-                                      decoration: BoxDecoration(
-                                        color: isOnline ? const Color(0xFF10B981) : Colors.grey.shade400,
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                          color: isDark ? AppColors.darkSurface : Colors.white,
-                                          width: 2,
+                                  if (isSelected)
+                                    Positioned(
+                                      right: 0,
+                                      bottom: 0,
+                                      child: Container(
+                                        width: 20,
+                                        height: 20,
+                                        decoration: BoxDecoration(
+                                          color: _pinkPrimary,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: isDark ? const Color(0xFF0B141A) : Colors.white,
+                                            width: 1.5,
+                                          ),
+                                        ),
+                                        child: const Icon(
+                                          Icons.check_rounded,
+                                          size: 13,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    )
+                                  else if (isOnline)
+                                    Positioned(
+                                      right: 1,
+                                      bottom: 1,
+                                      child: Container(
+                                        width: 12,
+                                        height: 12,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF10B981),
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: isDark ? const Color(0xFF0B141A) : Colors.white,
+                                            width: 2,
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
                                 ],
                               ),
-                              const SizedBox(width: 12),
+                              const SizedBox(width: 14),
+
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2375,79 +3272,361 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
                                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                       children: [
                                         Expanded(
-                                          child: Row(
+                                          child: Text(
+                                            item.peerName,
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 16,
+                                              color: isDark ? const Color(0xFFE9EDEF) : const Color(0xFF0F172A),
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          FormatHelper.formatEmailDate(item.lastTimestamp),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: item.unreadCount > 0 ? FontWeight.bold : FontWeight.normal,
+                                            color: item.unreadCount > 0
+                                                ? (isDark ? _pinkAccent : _pinkPrimary)
+                                                : (isDark ? const Color(0xFF8696A0) : const Color(0xFF94A3B8)),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: 3),
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.done_all_rounded,
+                                          size: 16,
+                                          color: isDark ? const Color(0xFF8696A0) : const Color(0xFF94A3B8),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Expanded(
+                                          child: Text(
+                                            item.lastMessage.isNotEmpty ? item.lastMessage : 'Tidak ada pesan',
+                                            style: TextStyle(
+                                              fontSize: 13.5,
+                                              color: isDark ? const Color(0xFF8696A0) : const Color(0xFF64748B),
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        if (item.isPinned) ...[
+                                          const SizedBox(width: 6),
+                                          Transform.rotate(
+                                            angle: 0.5,
+                                            child: Icon(
+                                              Icons.push_pin_rounded,
+                                              size: 16,
+                                              color: isDark ? const Color(0xFF8696A0) : const Color(0xFF94A3B8),
+                                            ),
+                                          ),
+                                        ],
+                                        if (item.unreadCount > 0) ...[
+                                          const SizedBox(width: 6),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+                                            decoration: const BoxDecoration(
+                                              color: _pinkPrimary,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            alignment: Alignment.center,
+                                            child: Text(
+                                              '${item.unreadCount}',
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 80, right: 16),
+                          child: Divider(
+                            height: 1,
+                            thickness: 0.5,
+                            color: isDark ? const Color(0xFF202C33) : const Color(0xFFF1F5F9),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildArchivedConversationsView(String currentEmail, bool isDark) {
+    return StreamBuilder<List<DirectConversationItem>>(
+      stream: _chatService.getDirectConversationsStream(currentEmail),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting && !snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator(color: _pinkPrimary));
+        }
+
+        final list = snapshot.data ?? [];
+        final archivedList = list.where((item) => item.isArchived).toList();
+
+        if (archivedList.isEmpty) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: _pinkPrimary.withValues(alpha: 0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.archive_outlined,
+                      size: 48,
+                      color: _pinkPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Belum Ada Obrolan Diarsipkan',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? const Color(0xFFE9EDEF) : const Color(0xFF0F172A),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tahan obrolan di layar utama dan pilih ikon arsip untuk menyimpannya di sini.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: isDark ? const Color(0xFF8696A0) : const Color(0xFF64748B),
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        return Column(
+          children: [
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF202C33) : const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.info_outline_rounded,
+                    size: 18,
+                    color: isDark ? const Color(0xFF8696A0) : const Color(0xFF64748B),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Obrolan ini akan tetap diarsipkan saat ada pesan baru masuk.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? const Color(0xFF8696A0) : const Color(0xFF64748B),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.only(bottom: 24),
+                itemCount: archivedList.length,
+                itemBuilder: (context, index) {
+                  final item = archivedList[index];
+                  final isSelected = _selectedChatKeys.contains(item.peerEmail);
+
+                  return StreamBuilder<UserPresence>(
+                    stream: _chatService.getUserPresenceStream(item.peerEmail),
+                    builder: (context, presenceSnap) {
+                      final isOnline = presenceSnap.data?.isOnline ?? false;
+
+                      return Material(
+                        color: isSelected
+                            ? (isDark ? _pinkSelectedDark : _pinkSelectedLight)
+                            : Colors.transparent,
+                        child: InkWell(
+                          onTap: () {
+                            if (_selectedChatKeys.isNotEmpty) {
+                              HapticFeedback.selectionClick();
+                              setState(() {
+                                if (isSelected) {
+                                  _selectedChatKeys.remove(item.peerEmail);
+                                } else {
+                                  _selectedChatKeys.add(item.peerEmail);
+                                }
+                              });
+                            } else {
+                              _openDirectChat(
+                                peerEmail: item.peerEmail,
+                                peerName: item.peerName,
+                                peerTag: item.peerTag,
+                              );
+                            }
+                          },
+                          onLongPress: () {
+                            HapticFeedback.mediumImpact();
+                            setState(() {
+                              if (isSelected) {
+                                _selectedChatKeys.remove(item.peerEmail);
+                              } else {
+                                _selectedChatKeys.add(item.peerEmail);
+                              }
+                            });
+                          },
+                          child: Column(
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                child: Row(
+                                  children: [
+                                    Stack(
+                                      children: [
+                                        UserAvatar(
+                                          email: item.peerEmail,
+                                          name: item.peerName,
+                                          radius: 26,
+                                        ),
+                                        if (isSelected)
+                                          Positioned(
+                                            right: 0,
+                                            bottom: 0,
+                                            child: Container(
+                                              width: 20,
+                                              height: 20,
+                                              decoration: BoxDecoration(
+                                                color: _pinkPrimary,
+                                                shape: BoxShape.circle,
+                                                border: Border.all(
+                                                  color: isDark ? const Color(0xFF0B141A) : Colors.white,
+                                                  width: 1.5,
+                                                ),
+                                              ),
+                                              child: const Icon(
+                                                Icons.check_rounded,
+                                                size: 13,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          )
+                                        else if (isOnline)
+                                          Positioned(
+                                            right: 1,
+                                            bottom: 1,
+                                            child: Container(
+                                              width: 12,
+                                              height: 12,
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFF10B981),
+                                                shape: BoxShape.circle,
+                                                border: Border.all(
+                                                  color: isDark ? const Color(0xFF0B141A) : Colors.white,
+                                                  width: 2,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                    const SizedBox(width: 14),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                             children: [
-                                              Flexible(
+                                              Expanded(
                                                 child: Text(
                                                   item.peerName,
-                                                  style: const TextStyle(
-                                                    fontWeight: FontWeight.bold,
-                                                    fontSize: 13.5,
+                                                  style: TextStyle(
+                                                    fontWeight: FontWeight.w600,
+                                                    fontSize: 16,
+                                                    color: isDark ? const Color(0xFFE9EDEF) : const Color(0xFF0F172A),
                                                   ),
                                                   maxLines: 1,
                                                   overflow: TextOverflow.ellipsis,
                                                 ),
                                               ),
-                                              const SizedBox(width: 6),
-                                              Container(
-                                                padding: const EdgeInsets.symmetric(
-                                                    horizontal: 5, vertical: 1),
-                                                decoration: BoxDecoration(
-                                                  color: tagColor.withValues(alpha: 0.15),
-                                                  borderRadius: BorderRadius.circular(5),
-                                                ),
-                                                child: Text(
-                                                  item.peerTag,
-                                                  style: TextStyle(
-                                                    color: tagColor,
-                                                    fontSize: 9,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                FormatHelper.formatEmailDate(item.lastTimestamp),
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  fontWeight: item.unreadCount > 0 ? FontWeight.bold : FontWeight.normal,
+                                                  color: item.unreadCount > 0
+                                                      ? (isDark ? _pinkAccent : _pinkPrimary)
+                                                      : (isDark ? const Color(0xFF8696A0) : const Color(0xFF94A3B8)),
                                                 ),
                                               ),
-                                              if (isOnline) ...[
-                                                const SizedBox(width: 6),
-                                                Container(
-                                                  padding: const EdgeInsets.symmetric(
-                                                      horizontal: 5, vertical: 1),
-                                                  decoration: BoxDecoration(
-                                                    color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                                                    borderRadius: BorderRadius.circular(5),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 3),
+                                          Row(
+                                            children: [
+                                              Icon(
+                                                Icons.done_all_rounded,
+                                                size: 16,
+                                                color: isDark ? const Color(0xFF8696A0) : const Color(0xFF94A3B8),
+                                              ),
+                                              const SizedBox(width: 4),
+                                              Expanded(
+                                                child: Text(
+                                                  item.lastMessage.isNotEmpty ? item.lastMessage : 'Tidak ada pesan',
+                                                  style: TextStyle(
+                                                    fontSize: 13.5,
+                                                    color: isDark ? const Color(0xFF8696A0) : const Color(0xFF64748B),
                                                   ),
-                                                  child: const Row(
-                                                    mainAxisSize: MainAxisSize.min,
-                                                    children: [
-                                                      CircleAvatar(
-                                                        radius: 2.5,
-                                                        backgroundColor: Color(0xFF10B981),
-                                                      ),
-                                                      SizedBox(width: 3),
-                                                      Text(
-                                                        'Online',
-                                                        style: TextStyle(
-                                                          color: Color(0xFF10B981),
-                                                          fontSize: 9,
-                                                          fontWeight: FontWeight.bold,
-                                                        ),
-                                                      ),
-                                                    ],
-                                                  ),
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
                                                 ),
-                                              ],
+                                              ),
                                               if (item.unreadCount > 0) ...[
                                                 const SizedBox(width: 6),
                                                 Container(
-                                                  padding: const EdgeInsets.symmetric(
-                                                      horizontal: 6, vertical: 1.5),
-                                                  decoration: BoxDecoration(
-                                                    color: const Color(0xFFE11D48),
-                                                    borderRadius: BorderRadius.circular(10),
+                                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                  constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
+                                                  decoration: const BoxDecoration(
+                                                    color: _pinkPrimary,
+                                                    shape: BoxShape.circle,
                                                   ),
+                                                  alignment: Alignment.center,
                                                   child: Text(
                                                     '${item.unreadCount}',
                                                     style: const TextStyle(
                                                       color: Colors.white,
-                                                      fontSize: 9.5,
+                                                      fontSize: 11,
                                                       fontWeight: FontWeight.bold,
                                                     ),
                                                   ),
@@ -2455,49 +3634,32 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
                                               ],
                                             ],
                                           ),
-                                        ),
-                                        if (item.isPinned) ...[
-                                          const Icon(
-                                            Icons.push_pin_rounded,
-                                            size: 14,
-                                            color: Colors.amber,
-                                          ),
-                                          const SizedBox(width: 4),
                                         ],
-                                        const Icon(
-                                          Icons.arrow_forward_ios_rounded,
-                                          size: 12,
-                                          color: Colors.grey,
-                                        ),
-                                      ],
+                                      ),
                                     ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  item.lastMessage,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: isDark
-                                        ? AppColors.darkTextMuted
-                                        : AppColors.lightTextMuted,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                                  ],
                                 ),
-                              ],
-                            ),
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.only(left: 80, right: 16),
+                                child: Divider(
+                                  height: 1,
+                                  thickness: 0.5,
+                                  color: isDark ? const Color(0xFF202C33) : const Color(0xFFF1F5F9),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                    ),
+                        ),
+                      );
+                    },
                   );
                 },
-              );
-            },
-          );
-        },
-      ),
-    ),
-  ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -3557,6 +4719,70 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
       fallbackRole: message.senderRole,
     );
     final roleBadgeColor = UserTagResolver.getTagColor(roleTag);
+
+    // Tampilan khusus pesan Kartu Rekap Presensi & Pilihan Kelas dari Bot
+    if (message.isPresensiBot || message.isPresensiClasses) {
+      ClassAttendanceSummary? summary;
+      List<ClassItem>? classList;
+
+      if (message.metadata != null && message.metadata!.isNotEmpty) {
+        if (message.isPresensiBot) {
+          summary = ClassAttendanceSummary.fromRawJson(message.metadata);
+        } else if (message.isPresensiClasses) {
+          try {
+            final decoded = jsonDecode(message.metadata!);
+            if (decoded is List) {
+              classList = decoded
+                  .whereType<Map<String, dynamic>>()
+                  .map((e) => ClassItem.fromJson(e))
+                  .toList();
+            }
+          } catch (_) {}
+        }
+      }
+
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Flexible(
+              child: PresensiBotBubbleWidget(
+                summary: summary,
+                classList: classList,
+                isDark: isDark,
+                onClassSelected: (c) {
+                  _onPresensiClassSelected(c, currentEmail);
+                },
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Tampilan khusus pesan Kartu Rekap Kehadiran Guru & TU (@hadir)
+    if (message.isTeachersPresenceBot) {
+      TeacherAttendanceSummary? summary;
+      if (message.metadata != null && message.metadata!.isNotEmpty) {
+        summary = TeacherAttendanceSummary.fromRawJson(message.metadata);
+      }
+
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Flexible(
+              child: TeacherAttendanceBubbleWidget(
+                summary: summary,
+                isDark: isDark,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     if (message.isSticker) {
       final stickerUrl = message.effectiveFileUrl;
@@ -4714,6 +5940,13 @@ class _BaknusChatScreenState extends State<BaknusChatScreen> with WidgetsBinding
       children: [
         _buildReplyPreviewBar(isDark),
         _buildEditingPreviewBar(isDark),
+        if (_showPresensiSuggestion)
+          _buildPresensiSuggestionBar(
+            isDark: isDark,
+            senderEmail: senderEmail,
+            senderName: senderName,
+            senderTag: senderTag,
+          ),
         Container(
           padding: EdgeInsets.only(
             left: 10,

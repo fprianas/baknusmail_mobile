@@ -24,12 +24,25 @@ class BaknusPortalScreen extends StatefulWidget {
 
 class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
   final ChatService _chatService = ChatService();
+  Stream<int>? _unreadCountStream;
+  Stream<List<DirectConversationItem>>? _directConversationsStream;
+  String? _lastStreamEmail;
+
+  void _ensureChatStreams(String email) {
+    final clean = email.toLowerCase().trim();
+    if (clean.isNotEmpty && _lastStreamEmail != clean) {
+      _lastStreamEmail = clean;
+      _unreadCountStream = _chatService.getUnreadCountStream(clean);
+      _directConversationsStream = _chatService.getDirectConversationsStream(clean);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final email = context.read<AuthProvider>().currentUser?.email ?? '';
+      final user = context.read<AuthProvider>().currentUser;
+      final email = user?.email ?? '';
       context.read<MailProvider>().loadFoldersAndEmails();
       context.read<WeatherProvider>().fetchWeather();
       if (email.isNotEmpty) {
@@ -69,6 +82,7 @@ class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
                 : (user?.email ?? '')));
 
     final userRole = baknus.userRole;
+    _ensureChatStreams(userEmail);
 
     return AppBackground(
       child: Scaffold(
@@ -355,9 +369,8 @@ class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
               ],
             ),
             const SizedBox(height: 12),
-
             StreamBuilder<int>(
-                stream: _chatService.getUnreadCountStream(userEmail),
+                stream: _unreadCountStream,
                 builder: (context, chatSnap) {
                   final unreadChat = chatSnap.data ?? 0;
                   return Column(
@@ -443,12 +456,26 @@ class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
                             isDark: isDark,
                             onTap: () => Navigator.pushNamed(context, '/drive'),
                           ),
+                          _buildServiceButton(
+                            title: 'BaknusITCare',
+                            subtitle: 'Layanan Laporan & Bantuan IT Sekolah',
+                            badge: 'Helpdesk',
+                            badgeColor: const Color(0xFF0284C7),
+                            icon: Icons.support_agent_rounded,
+                            color: const Color(0xFF0284C7),
+                            isDark: isDark,
+                            onTap: () => Navigator.pushNamed(context, '/it_care'),
+                          ),
                         ],
                       ),
-                      const SizedBox(height: 20),
+                      const SizedBox(height: 16),
 
                       // ==================== FEATURED: BAKNUSCHAT BANNER ====================
                       _buildChatFeaturedCard(context, isDark, userEmail, unreadChat, auth.isParentMode),
+                      const SizedBox(height: 12),
+
+                      // ==================== FEATURED: BAKNUSITCARE BANNER ====================
+                      _buildITCareFeaturedCard(context, isDark),
                     ],
                   );
                 },
@@ -478,8 +505,9 @@ class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
 
   Widget _buildChatFeaturedCard(
       BuildContext context, bool isDark, String userEmail, int unreadChatCount, bool isParentMode) {
+    _ensureChatStreams(userEmail);
     return StreamBuilder<List<DirectConversationItem>>(
-      stream: _chatService.getDirectConversationsStream(userEmail),
+      stream: _directConversationsStream,
       builder: (context, snapshot) {
         final conversations = snapshot.data ?? [];
         final lastConvo = conversations.isNotEmpty ? conversations.first : null;
@@ -730,6 +758,121 @@ class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
           ),
         );
       },
+    );
+  }
+
+  // ==================== FEATURED: BAKNUSITCARE BANNER ====================
+  Widget _buildITCareFeaturedCard(BuildContext context, bool isDark) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkSurface : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => Navigator.pushNamed(context, '/it_care'),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF0284C7), Color(0xFF0369A1)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(
+                    Icons.support_agent_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'BaknusITCare',
+                            style: TextStyle(
+                              color: isDark
+                                  ? AppColors.darkTextPrimary
+                                  : AppColors.lightTextPrimary,
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0284C7).withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              'Helpdesk 24/7',
+                              style: TextStyle(
+                                color: Color(0xFF0284C7),
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Layanan Laporan & Bantuan IT Sekolah',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: isDark
+                              ? AppColors.darkTextMuted
+                              : AppColors.lightTextMuted,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.arrow_forward_rounded,
+                          size: 14, color: Colors.white),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 

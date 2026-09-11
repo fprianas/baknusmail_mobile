@@ -6,6 +6,9 @@ import '../../providers/auth_provider.dart';
 import '../../providers/theme_provider.dart';
 import '../../providers/mailcow_provider.dart';
 import '../../data/services/storage_service.dart';
+import '../../data/services/fcm_service.dart';
+import '../../providers/security_provider.dart';
+import 'security_settings_screen.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/avatar_picker_dialog.dart';
 import '../widgets/role_selection_dialog.dart';
@@ -190,6 +193,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final auth = context.watch<AuthProvider>();
     final themeProvider = context.watch<ThemeProvider>();
     final mailcow = context.watch<MailcowProvider>();
+    final security = context.watch<SecurityProvider>();
     final user = auth.currentUser;
     final userEmail = user?.email ?? '';
 
@@ -398,6 +402,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 20),
 
+          // Keamanan Aplikasi (PIN & Biometrik)
+          _buildSectionHeader('Keamanan & Kunci Aplikasi', isDark),
+          Container(
+            decoration: BoxDecoration(
+              color: isDark ? AppColors.darkSurface : Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+              ),
+            ),
+            child: ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: (security.isAppLockEnabled ? const Color(0xFF059669) : AppColors.primary).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  security.isAppLockEnabled ? Icons.shield_rounded : Icons.shield_outlined,
+                  color: security.isAppLockEnabled ? const Color(0xFF059669) : AppColors.primary,
+                  size: 24,
+                ),
+              ),
+              title: const Text(
+                'Kunci Aplikasi & Privasi',
+                style: TextStyle(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              subtitle: Text(
+                security.isAppLockEnabled
+                    ? 'Aktif (${security.isBiometricEnabled ? "PIN & ${security.biometricLabel}" : "PIN 6 Digit"})'
+                    : 'Nonaktif • Amankan email & portal dengan PIN/Biometrik',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: security.isAppLockEnabled
+                      ? const Color(0xFF059669)
+                      : (isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted),
+                  fontWeight: security.isAppLockEnabled ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (ctx) => const SecuritySettingsScreen()),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 20),
+
           // Theme Settings
           _buildSectionHeader('Tampilan & Tema', isDark),
           Container(
@@ -485,6 +542,87 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 20),
           ],
 
+
+          // Uji Notifikasi Perangkat
+          _buildSectionHeader('Uji Notifikasi Perangkat (Kustom Suara & Banner)', isDark),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isDark ? AppColors.darkSurface : Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Tekan tombol di bawah untuk membuktikan notifikasi (Banner & Suara Kustom) berjalan secara instan di HP/emulator Anda:',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF059669),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      onPressed: () {
+                        context.read<FCMService>().showTestNotification('attend');
+                      },
+                      icon: const Icon(Icons.how_to_reg_rounded, size: 16),
+                      label: const Text('BaknusAttend', style: TextStyle(fontSize: 12)),
+                    ),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0284C7),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      onPressed: () {
+                        context.read<FCMService>().showTestNotification('drive');
+                      },
+                      icon: const Icon(Icons.cloud_done_rounded, size: 16),
+                      label: const Text('BaknusDrive', style: TextStyle(fontSize: 12)),
+                    ),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFD97706),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      onPressed: () {
+                        context.read<FCMService>().showTestNotification('talim');
+                      },
+                      icon: const Icon(Icons.auto_stories_rounded, size: 16),
+                      label: const Text('BaknusTalim', style: TextStyle(fontSize: 12)),
+                    ),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      ),
+                      onPressed: () {
+                        context.read<FCMService>().showTestNotification('email');
+                      },
+                      icon: const Icon(Icons.mark_email_unread_rounded, size: 16),
+                      label: const Text('BaknusMail', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
 
           // Server Info Shortcut
           _buildSectionHeader('Koneksi & Jaringan Server', isDark),

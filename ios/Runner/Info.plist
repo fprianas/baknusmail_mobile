@@ -49,5 +49,11 @@
 	<string>Aplikasi membutuhkan akses kamera untuk mengambil foto secara langsung dalam fitur chat.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Aplikasi membutuhkan akses galeri foto untuk mengunggah foto dalam fitur chat.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Aplikasi membutuhkan akses Face ID / Biometrik untuk membuka kunci aplikasi dengan aman.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Aplikasi membutuhkan akses Bluetooth untuk presensi menggunakan alat Wemos BLE.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Aplikasi membutuhkan akses Bluetooth untuk presensi menggunakan alat Wemos BLE.</string>
 </dict>
 </plist>

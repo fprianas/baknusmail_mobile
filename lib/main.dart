@@ -15,12 +15,16 @@ import 'data/services/smtp_service.dart';
 import 'data/services/baknus_api_service.dart';
 import 'data/services/weather_service.dart';
 import 'data/services/avatar_api_service.dart';
+import 'data/services/security_service.dart';
+import 'data/services/attendance_service.dart';
 import 'providers/theme_provider.dart';
 import 'providers/auth_provider.dart';
+import 'providers/attendance_provider.dart';
 import 'providers/mailcow_provider.dart';
 import 'providers/mail_provider.dart';
 import 'providers/baknus_provider.dart';
 import 'providers/weather_provider.dart';
+import 'providers/security_provider.dart';
 import 'presentation/screens/splash_screen.dart';
 import 'presentation/screens/login_screen.dart';
 import 'presentation/screens/baknus_portal_screen.dart';
@@ -32,8 +36,11 @@ import 'presentation/screens/email_detail_screen.dart';
 import 'presentation/screens/compose_screen.dart';
 import 'presentation/screens/server_status_screen.dart';
 import 'presentation/screens/settings_screen.dart';
+import 'presentation/screens/security_settings_screen.dart';
+import 'presentation/screens/app_lock_screen.dart';
 import 'presentation/screens/baknus_chat_screen.dart';
 import 'presentation/screens/weather_traffic_detail_screen.dart';
+import 'screens/it_care/baknus_it_care_home_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -80,25 +87,35 @@ void main() async {
   final smtpService = SmtpService();
 
   final baknusApiService = BaknusApiService();
+  final attendanceService = AttendanceService();
   final weatherService = WeatherService();
   final avatarApiService = AvatarApiService();
+  final securityService = SecurityService();
 
   runApp(
     MultiProvider(
       providers: [
         Provider<StorageService>.value(value: storageService),
         Provider<MailcowApiService>.value(value: apiService),
+        Provider<AttendanceService>.value(value: attendanceService),
         Provider<BaknusApiService>.value(value: baknusApiService),
         Provider<WeatherService>.value(value: weatherService),
         Provider<AvatarApiService>.value(value: avatarApiService),
         Provider<ImapService>.value(value: imapService),
         Provider<SmtpService>.value(value: smtpService),
         Provider<FCMService>.value(value: fcmService),
+        Provider<SecurityService>.value(value: securityService),
         ChangeNotifierProvider(
           create: (_) => ThemeProvider(storageService),
         ),
         ChangeNotifierProvider(
           create: (_) => AuthProvider(storageService, imapService, apiService, fcmService),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => SecurityProvider(storageService, securityService),
+        ),
+        ChangeNotifierProvider(
+          create: (_) => AttendanceProvider(attendanceService),
         ),
         ChangeNotifierProvider(
           create: (_) => BaknusProvider(baknusApiService),
@@ -132,8 +149,36 @@ void main() async {
   );
 }
 
-class BaknusMailApp extends StatelessWidget {
+class BaknusMailApp extends StatefulWidget {
   const BaknusMailApp({super.key});
+
+  @override
+  State<BaknusMailApp> createState() => _BaknusMailAppState();
+}
+
+class _BaknusMailAppState extends State<BaknusMailApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    final security = context.read<SecurityProvider>();
+    if (state == AppLifecycleState.paused) {
+      security.onAppPaused();
+    } else if (state == AppLifecycleState.resumed) {
+      security.onAppResumed();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -159,8 +204,29 @@ class BaknusMailApp extends StatelessWidget {
         '/compose': (context) => const ComposeScreen(),
         '/server_status': (context) => const ServerStatusScreen(),
         '/settings': (context) => const SettingsScreen(),
+        '/security_settings': (context) => const SecuritySettingsScreen(),
+        '/app_lock': (context) => const AppLockScreen(),
         '/chat': (context) => const BaknusChatScreen(),
         '/weather_traffic_detail': (context) => const WeatherTrafficDetailScreen(),
+        '/it_care': (context) => const BaknusITCareHomeScreen(),
+      },
+      builder: (context, child) {
+        return Consumer<SecurityProvider>(
+          builder: (context, security, _) {
+            final auth = context.watch<AuthProvider>();
+            final isLocked = security.isLocked && auth.isAuthenticated;
+
+            return Stack(
+              children: [
+                if (child != null) child,
+                if (isLocked)
+                  const Positioned.fill(
+                    child: AppLockScreen(key: ValueKey('app_lock_screen_overlay')),
+                  ),
+              ],
+            );
+          },
+        );
       },
     );
   }

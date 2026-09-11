@@ -4,6 +4,7 @@ import 'package:flutter_spinkit/flutter_spinkit.dart';
 import '../../core/config/mailcow_config.dart';
 import '../../core/theme/app_colors.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/security_provider.dart';
 import '../../data/services/fcm_service.dart';
 
 import '../widgets/app_background.dart';
@@ -28,6 +29,11 @@ class _SplashScreenState extends State<SplashScreen> {
 
     final auth = context.read<AuthProvider>();
     if (auth.isAuthenticated) {
+      final security = context.read<SecurityProvider>();
+      if (security.isAppLockEnabled && security.hasPin) {
+        security.lock();
+      }
+
       final fcmService = context.read<FCMService>();
       final pendingTarget = await fcmService.checkPendingNotificationLaunch();
 

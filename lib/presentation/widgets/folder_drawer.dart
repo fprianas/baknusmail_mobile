@@ -331,6 +331,44 @@ class FolderDrawer extends StatelessWidget {
 
             ListTile(
               dense: true,
+              leading: const Icon(Icons.support_agent_rounded, color: Color(0xFF0284C7)),
+              title: Row(
+                children: [
+                  const Text(
+                    'BaknusITCare',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0284C7).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text(
+                      'Helpdesk IT',
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF0284C7),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              subtitle: const Text(
+                'Laporan & Bantuan IT Sekolah',
+                style: TextStyle(fontSize: 11),
+              ),
+              trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, '/it_care');
+              },
+            ),
+
+            ListTile(
+              dense: true,
               leading: Icon(
                 Icons.settings_outlined,
                 color: isDark

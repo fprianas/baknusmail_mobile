@@ -32,6 +32,7 @@ class ChatMessage {
   final bool isEdited;
   final DateTime? editedAt;
   final List<String> starredBy;
+  final String? metadata;
 
   ChatMessage({
     required this.id,
@@ -65,6 +66,7 @@ class ChatMessage {
     this.isEdited = false,
     this.editedAt,
     this.starredBy = const [],
+    this.metadata,
   });
 
   factory ChatMessage.fromFirestore(DocumentSnapshot doc) {
@@ -164,6 +166,7 @@ class ChatMessage {
       isEdited: editedVal,
       editedAt: editedTime,
       starredBy: starredList,
+      metadata: data['metadata']?.toString(),
     );
   }
 
@@ -208,8 +211,21 @@ class ChatMessage {
       'isEdited': isEdited,
       'editedAt': editedAt != null ? Timestamp.fromDate(editedAt!) : null,
       'starredBy': starredBy,
+      if (metadata != null) 'metadata': metadata,
     };
   }
+
+  bool get isPresensiBot =>
+      type == 'presensi_bot' ||
+      text.startsWith('📊 Rekap Kehadiran:');
+
+  bool get isPresensiClasses =>
+      type == 'presensi_classes' ||
+      text.startsWith('📋 Pilih Kelas Presensi');
+
+  bool get isTeachersPresenceBot =>
+      type == 'teachers_presence_bot' ||
+      text.startsWith('👨‍🏫 Kehadiran Guru & TU:');
 
   bool get isAudio =>
       type == 'audio' ||
