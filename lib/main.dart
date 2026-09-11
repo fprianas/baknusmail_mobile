@@ -40,6 +40,7 @@ import 'presentation/screens/security_settings_screen.dart';
 import 'presentation/screens/app_lock_screen.dart';
 import 'presentation/screens/baknus_chat_screen.dart';
 import 'presentation/screens/weather_traffic_detail_screen.dart';
+import 'presentation/screens/baknus_game_screen.dart';
 import 'screens/it_care/baknus_it_care_home_screen.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -209,6 +210,7 @@ class _BaknusMailAppState extends State<BaknusMailApp> with WidgetsBindingObserv
         '/chat': (context) => const BaknusChatScreen(),
         '/weather_traffic_detail': (context) => const WeatherTrafficDetailScreen(),
         '/it_care': (context) => const BaknusITCareHomeScreen(),
+        '/game': (context) => const BaknusGameScreen(),
       },
       builder: (context, child) {
         return Consumer<SecurityProvider>(

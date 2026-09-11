@@ -6,6 +6,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/mail_provider.dart';
 import 'user_avatar.dart';
 import 'quota_progress_card.dart';
+import 'baknus_class_dialog.dart';
 
 class FolderDrawer extends StatelessWidget {
   const FolderDrawer({super.key});
@@ -364,6 +365,82 @@ class FolderDrawer extends StatelessWidget {
               onTap: () {
                 Navigator.pop(context);
                 Navigator.pushNamed(context, '/it_care');
+              },
+            ),
+
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.school_rounded, color: Color(0xFF6366F1)),
+              title: Row(
+                children: [
+                  const Text(
+                    'BaknusClass',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD97706).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text(
+                      'Tahap Rilis',
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFFD97706),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              subtitle: const Text(
+                'Ruang Kelas & Belajar Digital',
+                style: TextStyle(fontSize: 11),
+              ),
+              trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+              onTap: () {
+                Navigator.pop(context);
+                showBaknusClassUnderDevDialog(context);
+              },
+            ),
+
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.sports_esports_rounded, color: Color(0xFF8B5CF6)),
+              title: Row(
+                children: [
+                  const Text(
+                    'BaknusGame',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF8B5CF6).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text(
+                      'SS Race',
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF8B5CF6),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              subtitle: const Text(
+                'Game Edukasi & Rekreasi Siswa',
+                style: TextStyle(fontSize: 11),
+              ),
+              trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, '/game');
               },
             ),
 

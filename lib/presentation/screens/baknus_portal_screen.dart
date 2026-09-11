@@ -10,6 +10,7 @@ import '../../providers/weather_provider.dart';
 import '../widgets/user_avatar.dart';
 import '../widgets/weather_widget.dart';
 import '../widgets/avatar_picker_dialog.dart';
+import '../widgets/baknus_class_dialog.dart';
 import '../../data/services/chat_service.dart';
 import '../../core/utils/user_tag_resolver.dart';
 
@@ -381,7 +382,7 @@ class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
                         crossAxisCount: 2,
                         crossAxisSpacing: 12,
                         mainAxisSpacing: 12,
-                        childAspectRatio: 1.25,
+                        childAspectRatio: 1.20,
                         children: [
                           _buildServiceButton(
                             title: 'BaknusMail',
@@ -466,6 +467,26 @@ class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
                             isDark: isDark,
                             onTap: () => Navigator.pushNamed(context, '/it_care'),
                           ),
+                          _buildServiceButton(
+                            title: 'BaknusClass',
+                            subtitle: 'Kelas & Belajar Digital',
+                            badge: 'Tahap Rilis',
+                            badgeColor: const Color(0xFFD97706),
+                            icon: Icons.school_rounded,
+                            color: const Color(0xFF6366F1),
+                            isDark: isDark,
+                            onTap: () => showBaknusClassUnderDevDialog(context),
+                          ),
+                          _buildServiceButton(
+                            title: 'BaknusGame',
+                            subtitle: 'SS Race & Game Siswa',
+                            badge: '1 Game Baru',
+                            badgeColor: const Color(0xFF8B5CF6),
+                            icon: Icons.sports_esports_rounded,
+                            color: const Color(0xFF8B5CF6),
+                            isDark: isDark,
+                            onTap: () => Navigator.pushNamed(context, '/game'),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 16),
@@ -476,6 +497,10 @@ class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
 
                       // ==================== FEATURED: BAKNUSITCARE BANNER ====================
                       _buildITCareFeaturedCard(context, isDark),
+                      const SizedBox(height: 12),
+
+                      // ==================== FEATURED: BAKNUSGAME BANNER ====================
+                      _buildGameFeaturedCard(context, isDark),
                     ],
                   );
                 },
@@ -865,6 +890,140 @@ class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
                     children: [
                       Icon(Icons.arrow_forward_rounded,
                           size: 14, color: Colors.white),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGameFeaturedCard(BuildContext context, bool isDark) {
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkSurface : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: const Color(0xFF8B5CF6).withValues(alpha: isDark ? 0.35 : 0.25),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF8B5CF6).withValues(alpha: isDark ? 0.15 : 0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => Navigator.pushNamed(context, '/game'),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF8B5CF6), Color(0xFFEC4899)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF8B5CF6).withValues(alpha: 0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.sports_esports_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'BaknusGame: SS Race',
+                            style: TextStyle(
+                              color: isDark
+                                  ? AppColors.darkTextPrimary
+                                  : AppColors.lightTextPrimary,
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 1.5),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF8B5CF6).withValues(alpha: 0.14),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Text(
+                              '🏎️ Game Baru',
+                              style: TextStyle(
+                                color: Color(0xFF8B5CF6),
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Game balap mobil seru karya tim SMK BN 666 (ssrace.baknusgame)',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: isDark
+                              ? AppColors.darkTextMuted
+                              : AppColors.lightTextMuted,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF8B5CF6), Color(0xFF7C3AED)],
+                    ),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.play_arrow_rounded,
+                          size: 15, color: Colors.white),
+                      SizedBox(width: 2),
+                      Text(
+                        'Main',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -1599,6 +1758,8 @@ class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
                     fontWeight: FontWeight.bold,
                     fontSize: 13.5,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 Text(
                   subtitle,
@@ -1608,6 +1769,8 @@ class _BaknusPortalScreenState extends State<BaknusPortalScreen> {
                         ? AppColors.darkTextMuted
                         : AppColors.lightTextMuted,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
