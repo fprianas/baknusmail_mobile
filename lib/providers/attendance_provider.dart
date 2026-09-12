@@ -305,10 +305,16 @@ class AttendanceProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  File? _lastRawPhoto;
+
+  // Getters
+  File? get lastRawPhoto => _lastRawPhoto;
+
   // ==================== CAPTURE SELFIE & SUBMIT ====================
 
-  /// Menjalankan alur capture kamera depan dan mengirim selfie ke backend CompreFace
-  Future<SelfieAttendanceResult?> captureSelfieAndSubmit({bool bypassGpsCheck = false}) async {
+  /// Menjalankan pengambilan foto dari kamera depan dan memprosesnya (crop & orientasi)
+  /// tanpa langsung mengirimkan data ke backend. Berguna untuk alur konfirmasi/pratinjau.
+  Future<File?> pickAndProcessSelfiePhoto({bool bypassGpsCheck = false}) async {
     _errorMessage = null;
 
     // 1. Pastikan token otentikasi sudah tersedia
@@ -352,10 +358,6 @@ class AttendanceProvider extends ChangeNotifier {
       }
     }
 
-    if (_isDinasLuar && _lokasiDinasLuar.trim().isEmpty) {
-      _lokasiDinasLuar = 'Penugasan Luar / DUDI';
-    }
-
     // 4. Buka Kamera Depan
     final XFile? captured = await _picker.pickImage(
       source: ImageSource.camera,
@@ -368,22 +370,49 @@ class AttendanceProvider extends ChangeNotifier {
       return null;
     }
 
-    _isSubmitting = true;
-    notifyListeners();
+    final rawFile = File(captured.path);
+    _lastRawPhoto = rawFile;
 
     // Standardisasi Foto ke Format Web:
     // 1. Putar sesuai EXIF fisik (0° tegak lurus)
     // 2. Center crop 1:1 Square (fokus wajah tengah-atas)
     // 3. Resize tepat 640x640 identik dengan standar master di server
-    final File initialPhoto = await _processSelfieImage(File(captured.path), mirror: false);
+    final File initialPhoto = await _processSelfieImage(rawFile, mirror: false);
     _lastCapturedPhoto = initialPhoto;
+    notifyListeners();
+
+    return initialPhoto;
+  }
+
+  /// Mengirim foto selfie yang sudah diproses & ditinjau ke backend CompreFace
+  Future<SelfieAttendanceResult?> submitProcessedSelfie({
+    File? photo,
+    String? customLokasiDinasLuar,
+    bool isForcedOut = false,
+  }) async {
+    final photoToSubmit = photo ?? _lastCapturedPhoto;
+    if (photoToSubmit == null) {
+      throw AttendanceException(message: 'Foto selfie belum diambil.');
+    }
+
+    if (customLokasiDinasLuar != null && customLokasiDinasLuar.trim().isNotEmpty) {
+      _lokasiDinasLuar = customLokasiDinasLuar.trim();
+    }
+
+    if (_isDinasLuar && _lokasiDinasLuar.trim().isEmpty) {
+      _lokasiDinasLuar = 'Penugasan Luar / DUDI';
+    }
+
+    _isSubmitting = true;
+    _errorMessage = null;
+    notifyListeners();
 
     final double lat = _currentPosition?.latitude ?? schoolSetting.lat;
     final double long = _currentPosition?.longitude ?? schoolSetting.long;
 
     try {
       final result = await _service.submitSelfie(
-        photo: initialPhoto,
+        photo: photoToSubmit,
         lat: lat,
         long: long,
         isDinasLuar: _isDinasLuar,
@@ -398,11 +427,10 @@ class AttendanceProvider extends ChangeNotifier {
     } on AttendanceException catch (e) {
       // Auto-Fallback Cerdas: Jika ditolak karena "Wajah Tidak Cocok",
       // besar kemungkinan kamera depan HP melakukan auto-mirror (pembalikan horizontal).
-      // Kita langsung coba otomatis kirimkan versi mirrored (flipHorizontal) dari foto yang sama!
-      if (e.isFaceMismatch) {
+      if (e.isFaceMismatch && _lastRawPhoto != null) {
         debugPrint('CompreFace AI: Wajah tidak cocok pada percobaan pertama. Mencoba otomatis versi mirror...');
         try {
-          final mirrorPhoto = await _processSelfieImage(File(captured.path), mirror: true);
+          final mirrorPhoto = await _processSelfieImage(_lastRawPhoto!, mirror: true);
           final mirrorResult = await _service.submitSelfie(
             photo: mirrorPhoto,
             lat: lat,
@@ -446,6 +474,13 @@ class AttendanceProvider extends ChangeNotifier {
       _isSubmitting = false;
       notifyListeners();
     }
+  }
+
+  /// Menjalankan alur lengkap capture kamera depan dan mengirim selfie ke backend CompreFace
+  Future<SelfieAttendanceResult?> captureSelfieAndSubmit({bool bypassGpsCheck = false}) async {
+    final photo = await pickAndProcessSelfiePhoto(bypassGpsCheck: bypassGpsCheck);
+    if (photo == null) return null;
+    return submitProcessedSelfie(photo: photo);
   }
 
   // ==================== PRE-PROCESSING FOTO KE STANDAR 640x640 ====================

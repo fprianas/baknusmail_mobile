@@ -138,9 +138,20 @@ exports.incomingEmailWebhook = onRequest({ cors: true }, async (req, res) => {
     }
 
     const message = {
+      notification: {
+        title: notifTitle,
+        body: displayBody,
+      },
       android: {
         collapseKey: `baknus_${channelId}`,
         priority: "high",
+        notification: {
+          channelId: channelId,
+          sound: soundName,
+          priority: "max",
+          defaultSound: false,
+          defaultVibrateTimings: true,
+        },
       },
       data: {
         click_action: "FLUTTER_NOTIFICATION_CLICK",

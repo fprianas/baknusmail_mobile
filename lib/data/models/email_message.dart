@@ -61,6 +61,8 @@ class EmailMessage {
     this.sizeInBytes = 0,
   });
 
+  String get id => messageId.isNotEmpty ? messageId : (sequenceId != null ? '$sequenceId' : '$dateTime-$subject');
+
   EmailMessage copyWith({
     int? sequenceId,
     String? messageId,

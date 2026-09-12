@@ -4,8 +4,10 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../main.dart';
 import '../../providers/mail_provider.dart';
+import 'storage_service.dart';
 
 class PendingNotificationTarget {
   final String route;
@@ -14,6 +16,16 @@ class PendingNotificationTarget {
   PendingNotificationTarget({required this.route, this.arguments});
 }
 
+// ==============================================================================
+// ⛔ PERINGATAN KERAS / STRICT PROTECTED CODE (AGENTS & DEVELOPERS):
+// BERKAS INI MENGATUR SISTEM PUSH NOTIFICATION FCM & TELAH TERINTEGRASI DENGAN
+// SERVER PRODUKSI BACKEND (COMMIT 0f471ee).
+// DILARANG MENGUBAH / MENGGANTI:
+// 1. Channel ID 'channel_email_umum_v4'
+// 2. Sound name 'sound_umum'
+// 3. Logika multi-token Firestore ('fcm_tokens') & session recovery di onTokenRefresh
+// PERUBAHAN APAPUN AKAN MERUSAK NOTIFIKASI DI HP PENGGUNA!
+// ==============================================================================
 class FCMService {
   FirebaseMessaging? get _firebaseMessaging {
     try {
@@ -164,10 +176,21 @@ class FCMService {
           debugPrint('User declined or has not accepted permission');
         }
 
-        messaging.onTokenRefresh.listen((newToken) {
-          if (_currentRegisteredEmail != null && _currentRegisteredEmail!.isNotEmpty) {
-            debugPrint('FCM token refreshed, re-registering for $_currentRegisteredEmail');
-            registerToken(_currentRegisteredEmail!);
+        messaging.onTokenRefresh.listen((newToken) async {
+          String? email = _currentRegisteredEmail;
+          if (email == null || email.isEmpty) {
+            try {
+              final prefs = await SharedPreferences.getInstance();
+              final rawUser = prefs.getString(StorageService.keyUser);
+              if (rawUser != null) {
+                final userMap = jsonDecode(rawUser) as Map<String, dynamic>;
+                email = userMap['email']?.toString();
+              }
+            } catch (_) {}
+          }
+          if (email != null && email.isNotEmpty) {
+            debugPrint('FCM token refreshed, re-registering for $email');
+            registerToken(email);
           }
         });
       } catch (e) {
@@ -422,8 +445,13 @@ class FCMService {
         sound = sound.isEmpty ? 'sound_umum' : sound;
       }
 
+      final String cleanBase = channelIdFromData
+          .replaceAll(RegExp(r'^channel_'), '')
+          .replaceAll(RegExp(r'_v\d+$'), '');
+      final String resolvedId = 'channel_${cleanBase}_v4';
+
       channelConfig = {
-        'id': 'channel_${channelIdFromData.replaceAll(RegExp(r'_v\d+$'), '')}_v4',
+        'id': resolvedId,
         'name': name,
         'desc': desc,
         'sound': sound,
@@ -483,6 +511,7 @@ class FCMService {
       priority: Priority.max,
       playSound: true,
       sound: RawResourceAndroidNotificationSound(channelConfig['sound']!),
+      icon: '@mipmap/ic_launcher',
       showWhen: true,
       tag: notifTag,
       groupKey: isChat
@@ -509,6 +538,7 @@ class FCMService {
         importance: Importance.max,
         priority: Priority.max,
         playSound: true,
+        icon: '@mipmap/ic_launcher',
         showWhen: true,
         tag: notifTag,
       );
@@ -636,6 +666,65 @@ class FCMService {
     } catch (e) {
       debugPrint('Warning: Error unregistering FCM token: $e');
     }
+  }
+
+  /// Menampilkan notifikasi lokal untuk email baru yang masuk
+  Future<void> showIncomingEmailNotification({
+    required String from,
+    required String subject,
+    String? body,
+    String? snippet,
+  }) async {
+    final senderStr = from;
+    final subjectStr = subject;
+    final displayBody = (body != null && body.isNotEmpty)
+        ? body
+        : ((snippet != null && snippet.isNotEmpty) ? snippet : 'Anda menerima email baru');
+
+    final config = _getChannelAndSound(senderStr, subjectStr, null, displayBody);
+    final notifId = DateTime.now().millisecondsSinceEpoch & 0x7FFFFFFF;
+    final notifTag = 'baknus_incoming_email_$notifId';
+
+    String targetRoute = '/home';
+    if (config['id'] == 'channel_baknus_attend_v4') {
+      targetRoute = '/attend';
+    } else if (config['id'] == 'channel_baknus_drive_v4') {
+      targetRoute = '/drive';
+    } else if (config['id'] == 'channel_baknus_talim_v4') {
+      targetRoute = '/talim';
+    }
+
+    final payloadMap = {
+      'route': targetRoute,
+      'email_from': senderStr,
+      'subject': subjectStr,
+      'notif_title': 'Email dari $senderStr',
+      'notif_body': displayBody,
+      'channel_id': config['id'],
+      'sound_name': config['sound'],
+    };
+
+    final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
+      config['id']!,
+      config['name']!,
+      channelDescription: config['desc'],
+      importance: Importance.max,
+      priority: Priority.max,
+      playSound: true,
+      sound: RawResourceAndroidNotificationSound(config['sound']!),
+      icon: '@mipmap/ic_launcher',
+      showWhen: true,
+      tag: notifTag,
+      groupKey: 'com.baknus.baknusmail.NOTIFICATIONS',
+    );
+
+    await _localNotificationsPlugin.show(
+      id: notifId,
+      title: '📧 Email Baru: $senderStr',
+      body: subjectStr.isNotEmpty ? subjectStr : displayBody,
+      notificationDetails: NotificationDetails(android: androidDetails),
+      payload: jsonEncode(payloadMap),
+    );
   }
 
   /// Menampilkan notifikasi lokal ketika email berhasil dikirim ("Kirim Email")

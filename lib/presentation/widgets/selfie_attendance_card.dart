@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/app_colors.dart';
@@ -901,6 +902,13 @@ class _SelfieAttendanceCardState extends State<SelfieAttendanceCard> {
 
   // ==================== WIDGET DINAS LUAR ====================
   Widget _buildDinasLuarSection(AttendanceProvider attend, bool isDark, bool isDinasLuar) {
+    if (isDinasLuar &&
+        _lokasiController.text.isEmpty &&
+        attend.lokasiDinasLuar.isNotEmpty &&
+        attend.lokasiDinasLuar != 'Penugasan Luar / DUDI') {
+      _lokasiController.text = attend.lokasiDinasLuar;
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -929,8 +937,20 @@ class _SelfieAttendanceCardState extends State<SelfieAttendanceCard> {
               value: isDinasLuar,
               activeTrackColor: const Color(0xFF3B82F6),
               activeThumbColor: Colors.white,
-              onChanged: (val) {
-                attend.setDinasLuar(val);
+              onChanged: (val) async {
+                if (val) {
+                  if (_lokasiController.text.trim().isEmpty) {
+                    final loc = await _promptLokasiDinasLuar(context);
+                    if (loc != null && loc.trim().isNotEmpty) {
+                      _lokasiController.text = loc;
+                      attend.setDinasLuar(true, lokasi: loc);
+                    }
+                  } else {
+                    attend.setDinasLuar(true, lokasi: _lokasiController.text.trim());
+                  }
+                } else {
+                  attend.setDinasLuar(false);
+                }
               },
             ),
           ],
@@ -1437,6 +1457,389 @@ class _SelfieAttendanceCardState extends State<SelfieAttendanceCard> {
 
   // ==================== LOGIKA SUBMIT & ERROR DIALOGS ====================
 
+  /// Dialog untuk meminta nama/lokasi penugasan dinas luar jika belum terisi atau diaktifkan
+  Future<String?> _promptLokasiDinasLuar(BuildContext context, {String initialValue = ''}) async {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final controller = TextEditingController(text: initialValue);
+    final formKey = GlobalKey<FormState>();
+
+    return showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: const Row(
+          children: [
+            Icon(Icons.business_center_rounded, color: Color(0xFF3B82F6), size: 24),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Lokasi Penugasan Dinas Luar',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ],
+        ),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Mohon isi nama instansi, kantor, atau tempat penugasan dinas luar Anda agar tercatat akurat pada sistem presensi.',
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.4,
+                  color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                ),
+              ),
+              const SizedBox(height: 14),
+              TextFormField(
+                controller: controller,
+                autofocus: true,
+                style: const TextStyle(fontSize: 13),
+                decoration: InputDecoration(
+                  labelText: 'Nama / Alamat Tempat Dinas Luar *',
+                  labelStyle: const TextStyle(fontSize: 12),
+                  hintText: 'Contoh: PT Telkom Indonesia, Seminar di UPI, dll.',
+                  hintStyle: const TextStyle(fontSize: 11.5),
+                  prefixIcon: const Icon(Icons.location_on_rounded, size: 18),
+                  filled: true,
+                  fillColor: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.grey.shade50,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                ),
+                validator: (val) {
+                  if (val == null || val.trim().isEmpty) {
+                    return 'Lokasi dinas luar wajib diisi';
+                  }
+                  if (val.trim().length < 3) {
+                    return 'Nama tempat minimal 3 karakter';
+                  }
+                  return null;
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF3B82F6),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.check_rounded, size: 18),
+            label: const Text('Simpan & Lanjutkan', style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: () {
+              if (formKey.currentState?.validate() == true) {
+                Navigator.pop(ctx, controller.text.trim());
+              }
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Menampilkan modal dialog pratinjau foto selfie dan konfirmasi presensi
+  Future<dynamic> _showSelfieConfirmationDialog({
+    required BuildContext context,
+    required AttendanceProvider attend,
+    required File photo,
+    required String actionType,
+    required bool isForcedOut,
+  }) async {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final isDinas = attend.isDinasLuar;
+    final currentLokasi = _lokasiController.text.isNotEmpty
+        ? _lokasiController.text
+        : (attend.lokasiDinasLuar.isNotEmpty && attend.lokasiDinasLuar != 'Penugasan Luar / DUDI'
+            ? attend.lokasiDinasLuar
+            : '');
+    final lokasiConfirmController = TextEditingController(text: currentLokasi);
+    final formKey = GlobalKey<FormState>();
+
+    Color typeColor = const Color(0xFF10B981);
+    if (actionType.toLowerCase().contains('pulang')) {
+      typeColor = const Color(0xFFF59E0B);
+    }
+
+    return showDialog<dynamic>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        bool isSubmittingLocal = false;
+
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+              titlePadding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+              contentPadding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+              actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              title: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: typeColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(
+                      actionType.toLowerCase().contains('pulang')
+                          ? Icons.logout_rounded
+                          : Icons.login_rounded,
+                      color: typeColor,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Konfirmasi Presensi',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        Text(
+                          'Presensi $actionType • CompreFace AI',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Pratinjau Foto Selfie
+                      Container(
+                        width: 180,
+                        height: 180,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(
+                            color: isDark ? Colors.white24 : Colors.grey.shade300,
+                            width: 2,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.1),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            Image.file(
+                              photo,
+                              fit: BoxFit.cover,
+                            ),
+                            Positioned(
+                              bottom: 6,
+                              left: 6,
+                              right: 6,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.65),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 12),
+                                    SizedBox(width: 4),
+                                    Text(
+                                      '640×640 Siap AI',
+                                      style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Status GPS Geofencing
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: (isDinas ? const Color(0xFF3B82F6) : const Color(0xFF10B981)).withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: (isDinas ? const Color(0xFF3B82F6) : const Color(0xFF10B981)).withValues(alpha: 0.25),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              isDinas ? Icons.business_center_rounded : Icons.location_on_rounded,
+                              size: 16,
+                              color: isDinas ? const Color(0xFF3B82F6) : const Color(0xFF10B981),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                isDinas
+                                    ? 'Status: Dinas Luar Sekolah'
+                                    : (attend.isWithinRadius
+                                        ? 'GPS: Berada di Dalam Radius Sekolah'
+                                        : 'GPS: ${attend.distanceToSchool?.toStringAsFixed(0) ?? "?"}m dari sekolah'),
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: isDinas ? const Color(0xFF3B82F6) : const Color(0xFF10B981),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                      // Input Lokasi Dinas Luar (jika dinas luar)
+                      if (isDinas) ...[
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: lokasiConfirmController,
+                          style: const TextStyle(fontSize: 12.5),
+                          decoration: InputDecoration(
+                            labelText: 'Tempat / Lokasi Dinas Luar *',
+                            labelStyle: const TextStyle(fontSize: 11.5),
+                            hintText: 'Misal: PT Telkom, Kantor Cabang, DUDI',
+                            hintStyle: const TextStyle(fontSize: 11),
+                            prefixIcon: const Icon(Icons.edit_location_alt_rounded, size: 18),
+                            filled: true,
+                            fillColor: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.grey.shade50,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          validator: (val) {
+                            if (val == null || val.trim().isEmpty) {
+                              return 'Lokasi dinas luar wajib diisi';
+                            }
+                            return null;
+                          },
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                Row(
+                  children: [
+                    // Tombol Ambil Ulang Foto
+                    Expanded(
+                      flex: 4,
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 11),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                        icon: const Icon(Icons.refresh_rounded, size: 16),
+                        label: const Text('Foto Ulang', style: TextStyle(fontSize: 12)),
+                        onPressed: isSubmittingLocal
+                            ? null
+                            : () => Navigator.pop(ctx, 'retake'),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+
+                    // Tombol Kirim Presensi Sekarang
+                    Expanded(
+                      flex: 6,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: typeColor,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 11),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          elevation: 2,
+                        ),
+                        icon: isSubmittingLocal
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.send_rounded, size: 16),
+                        label: Text(
+                          isSubmittingLocal ? 'Mengirim...' : 'Kirim Presensi',
+                          style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+                        ),
+                        onPressed: isSubmittingLocal
+                            ? null
+                            : () async {
+                                if (isDinas && formKey.currentState?.validate() != true) {
+                                  return;
+                                }
+
+                                final finalLokasi = lokasiConfirmController.text.trim();
+                                if (isDinas && finalLokasi.isNotEmpty) {
+                                  attend.setLokasiDinasLuar(finalLokasi);
+                                  _lokasiController.text = finalLokasi;
+                                }
+
+                                setModalState(() {
+                                  isSubmittingLocal = true;
+                                });
+
+                                try {
+                                  final result = await attend.submitProcessedSelfie(
+                                    photo: photo,
+                                    customLokasiDinasLuar: isDinas ? finalLokasi : null,
+                                    isForcedOut: isForcedOut,
+                                  );
+                                  if (ctx.mounted) {
+                                    Navigator.pop(ctx, result);
+                                  }
+                                } catch (e) {
+                                  setModalState(() {
+                                    isSubmittingLocal = false;
+                                  });
+                                  if (ctx.mounted) {
+                                    Navigator.pop(ctx, e);
+                                  }
+                                }
+                              },
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _handleSelfieAttendance(BuildContext context, AttendanceProvider attend) async {
     // 0. Cegah presensi jika sudah selesai presensi hari ini
     if (attend.isCompletedToday || attend.hasClockedOut) {
@@ -1444,8 +1847,11 @@ class _SelfieAttendanceCardState extends State<SelfieAttendanceCard> {
       return;
     }
 
-    // 1. Jika di luar radius dan belum dinas luar, tanyakan opsi dengan jelas
+    final bool isForcedOut = attend.presensiType.toLowerCase().contains('pulang');
+    final String actionType = isForcedOut ? 'Pulang' : 'Masuk';
     bool bypassGps = false;
+
+    // 1. Jika di luar radius dan belum dinas luar, tanyakan opsi dengan jelas & minta input lokasi jika dinas
     if (!attend.isDinasLuar && !attend.isWithinRadius && attend.distanceToSchool != null) {
       final school = attend.schoolSetting;
       final distStr = attend.distanceToSchool!.toStringAsFixed(0);
@@ -1485,11 +1891,8 @@ class _SelfieAttendanceCardState extends State<SelfieAttendanceCard> {
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF3B82F6)),
-              onPressed: () {
-                attend.setDinasLuar(true, lokasi: 'Penugasan Luar / DUDI');
-                Navigator.pop(ctx, 'dinas');
-              },
-              child: const Text('Aktifkan Dinas Luar & Foto'),
+              onPressed: () => Navigator.pop(ctx, 'dinas'),
+              child: const Text('Aktifkan Dinas Luar'),
             ),
             TextButton(
               onPressed: () => Navigator.pop(ctx, 'force'),
@@ -1500,43 +1903,93 @@ class _SelfieAttendanceCardState extends State<SelfieAttendanceCard> {
       );
 
       if (result == null || result == 'cancel') return;
-      if (result == 'force') bypassGps = true;
+      if (result == 'force') {
+        bypassGps = true;
+      } else if (result == 'dinas') {
+        if (!context.mounted) return;
+        final lokasi = await _promptLokasiDinasLuar(
+          context,
+          initialValue: _lokasiController.text,
+        );
+        if (lokasi == null || lokasi.trim().isEmpty) {
+          return;
+        }
+        attend.setDinasLuar(true, lokasi: lokasi);
+        _lokasiController.text = lokasi;
+      }
+    } else if (attend.isDinasLuar) {
+      // Jika sudah dalam status dinas luar tetapi lokasi masih kosong, minta input terlebih dahulu
+      if (_lokasiController.text.trim().isEmpty && attend.lokasiDinasLuar.trim().isEmpty) {
+        final lokasi = await _promptLokasiDinasLuar(context);
+        if (lokasi == null || lokasi.trim().isEmpty) return;
+        attend.setDinasLuar(true, lokasi: lokasi);
+        _lokasiController.text = lokasi;
+      }
     }
 
-    try {
-      final result = await attend.captureSelfieAndSubmit(bypassGpsCheck: bypassGps);
-      if (result != null && context.mounted) {
-        _showSuccessDialog(context, result);
-      }
-    } on AttendanceException catch (e) {
-      if (!context.mounted) return;
+    // 2. Loop Capture Foto & Konfirmasi (bisa foto ulang jika hasil buram/kurang cocok)
+    while (context.mounted) {
+      try {
+        final File? photo = await attend.pickAndProcessSelfiePhoto(bypassGpsCheck: bypassGps);
+        if (photo == null || !context.mounted) {
+          // Pengguna membatalkan kamera
+          return;
+        }
 
-      if (e.isCompleted) {
-        _showAttendanceCompletedDialog(context);
-      } else if (e.isFaceMismatch) {
-        _showFaceMismatchDialog(context, attend, e.message);
-      } else if (e.isOutsideRadius) {
-        _showOutsideRadiusDialog(context, e.message);
-      } else if (e.isRateLimit) {
-        _showRateLimitDialog(context, e.message);
-      } else {
+        final dynamic confirmResult = await _showSelfieConfirmationDialog(
+          context: context,
+          attend: attend,
+          photo: photo,
+          actionType: actionType,
+          isForcedOut: isForcedOut,
+        );
+
+        if (confirmResult == 'retake') {
+          // Ambil ulang foto (loop berlanjut)
+          continue;
+        } else if (confirmResult is SelfieAttendanceResult) {
+          if (context.mounted) {
+            _showSuccessDialog(context, confirmResult);
+          }
+          return;
+        } else if (confirmResult is Exception) {
+          throw confirmResult;
+        } else {
+          // Pengguna membatalkan dialog konfirmasi
+          return;
+        }
+      } on AttendanceException catch (e) {
+        if (!context.mounted) return;
+
+        if (e.isCompleted) {
+          _showAttendanceCompletedDialog(context);
+        } else if (e.isFaceMismatch) {
+          _showFaceMismatchDialog(context, attend, e.message);
+        } else if (e.isOutsideRadius) {
+          _showOutsideRadiusDialog(context, e.message);
+        } else if (e.isRateLimit) {
+          _showRateLimitDialog(context, e.message);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(e.message),
+              backgroundColor: AppColors.error,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        return;
+      } catch (e) {
+        if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(e.message),
+            content: Text('Gagal melakukan presensi: $e'),
             backgroundColor: AppColors.error,
             behavior: SnackBarBehavior.floating,
           ),
         );
+        return;
       }
-    } catch (e) {
-      if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Gagal melakukan presensi: $e'),
-          backgroundColor: AppColors.error,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
     }
   }
 
@@ -1630,17 +2083,24 @@ class _SelfieAttendanceCardState extends State<SelfieAttendanceCard> {
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2563EB)),
-              onPressed: () {
-                attend.setDinasLuar(true, lokasi: 'Penugasan Luar / DUDI');
-                Navigator.pop(ctx, 'dinas');
-              },
-              child: const Text('Aktifkan Dinas Luar & Tap'),
+              onPressed: () => Navigator.pop(ctx, 'dinas'),
+              child: const Text('Aktifkan Dinas Luar'),
             ),
           ],
         ),
       );
 
       if (result == 'cancel' || result == null) return;
+      if (result == 'dinas') {
+        if (!context.mounted) return;
+        final lokasi = await _promptLokasiDinasLuar(
+          context,
+          initialValue: _lokasiController.text,
+        );
+        if (lokasi == null || lokasi.trim().isEmpty) return;
+        attend.setDinasLuar(true, lokasi: lokasi);
+        _lokasiController.text = lokasi;
+      }
     }
 
     if (!context.mounted) return;
@@ -1695,17 +2155,24 @@ class _SelfieAttendanceCardState extends State<SelfieAttendanceCard> {
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF2563EB)),
-              onPressed: () {
-                attend.setDinasLuar(true, lokasi: 'Penugasan Luar / DUDI');
-                Navigator.pop(ctx, 'dinas');
-              },
-              child: const Text('Aktifkan Dinas Luar & Scan'),
+              onPressed: () => Navigator.pop(ctx, 'dinas'),
+              child: const Text('Aktifkan Dinas Luar'),
             ),
           ],
         ),
       );
 
       if (result == 'cancel' || result == null) return;
+      if (result == 'dinas') {
+        if (!context.mounted) return;
+        final lokasi = await _promptLokasiDinasLuar(
+          context,
+          initialValue: _lokasiController.text,
+        );
+        if (lokasi == null || lokasi.trim().isEmpty) return;
+        attend.setDinasLuar(true, lokasi: lokasi);
+        _lokasiController.text = lokasi;
+      }
     }
 
     if (!context.mounted) return;
@@ -1981,9 +2448,16 @@ class _SelfieAttendanceCardState extends State<SelfieAttendanceCard> {
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF3B82F6)),
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(ctx);
-              context.read<AttendanceProvider>().setDinasLuar(true);
+              final lokasi = await _promptLokasiDinasLuar(
+                context,
+                initialValue: _lokasiController.text,
+              );
+              if (lokasi != null && lokasi.trim().isNotEmpty && context.mounted) {
+                context.read<AttendanceProvider>().setDinasLuar(true, lokasi: lokasi);
+                _lokasiController.text = lokasi;
+              }
             },
             child: const Text('Aktifkan Dinas Luar'),
           ),

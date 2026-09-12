@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../data/models/email_message.dart';
@@ -7,6 +8,7 @@ import '../data/services/imap_service.dart';
 import '../data/services/smtp_service.dart';
 import '../data/services/storage_service.dart';
 import '../data/services/demo_data_service.dart';
+import '../data/services/fcm_service.dart';
 import 'auth_provider.dart';
 
 enum MailFilter { all, unread, starred, hasAttachments }
@@ -16,6 +18,10 @@ class MailProvider extends ChangeNotifier {
   final ImapService _imapService;
   final SmtpService _smtpService;
   final AuthProvider _authProvider;
+  final FCMService? _fcmService;
+
+  final Set<String> _knownEmailIds = {};
+  Timer? _periodicSyncTimer;
 
   List<FolderInfo> _folders = FolderInfo.getDefaultFolders();
   FolderInfo _currentFolder = FolderInfo.getDefaultFolders().first;
@@ -32,10 +38,12 @@ class MailProvider extends ChangeNotifier {
     this._storageService,
     this._imapService,
     this._smtpService,
-    this._authProvider,
-  ) {
+    this._authProvider, [
+    this._fcmService,
+  ]) {
     if (_authProvider.isAuthenticated) {
       loadFoldersAndEmails();
+      _startPeriodicSyncTimer();
     }
   }
 
@@ -116,6 +124,8 @@ class MailProvider extends ChangeNotifier {
   }
 
   void clearMailbox() {
+    _periodicSyncTimer?.cancel();
+    _knownEmailIds.clear();
     _emails = [];
     _folders = FolderInfo.getDefaultFolders();
     _currentFolder = FolderInfo.getDefaultFolders().first;
@@ -142,6 +152,7 @@ class MailProvider extends ChangeNotifier {
         _emails = cached;
         _sortEmailsByDate();
         _updateFolderCounts();
+        _knownEmailIds.addAll(cached.map((e) => e.id));
       }
     }
 
@@ -164,6 +175,7 @@ class MailProvider extends ChangeNotifier {
           _emails = DemoDataService.getDemoEmails();
           _sortEmailsByDate();
           _updateFolderCounts();
+          _knownEmailIds.addAll(_emails.map((e) => e.id));
         }
       } else {
         final isConnected = await _imapService.ensureConnected(currentUserEmail, currentUserPassword);
@@ -178,6 +190,19 @@ class MailProvider extends ChangeNotifier {
             folderPath: targetPath,
             count: 30,
           );
+
+          if (_knownEmailIds.isNotEmpty && targetPath == 'INBOX') {
+            final newMails = fetched.where((e) => !_knownEmailIds.contains(e.id) && !e.isRead).toList();
+            for (final m in newMails) {
+              _fcmService?.showIncomingEmailNotification(
+                from: m.from.name.isNotEmpty ? m.from.name : m.from.email,
+                subject: m.subject,
+                snippet: m.snippet,
+              );
+            }
+          }
+          _knownEmailIds.addAll(fetched.map((e) => e.id));
+
           if (fetched.isNotEmpty || _emails.isEmpty) {
             _emails = fetched;
           }
@@ -501,5 +526,60 @@ class MailProvider extends ChangeNotifier {
 
     updated.sort((a, b) => a.priority.compareTo(b.priority));
     _folders = updated;
+  }
+
+  /// Sinkronisasi email baru secara senyap di latar belakang (misal saat resumed atau via timer)
+  Future<void> syncNewEmailsInBackground() async {
+    if (!_authProvider.isAuthenticated || _isSyncing) return;
+    final currentUserEmail = _authProvider.currentUser?.email;
+    final currentUserPassword = _authProvider.currentUser?.password;
+    if (currentUserEmail == null || currentUserPassword == null) return;
+    if (_authProvider.currentUser?.isDemo == true || kIsWeb) return;
+
+    try {
+      final isConnected = await _imapService.ensureConnected(currentUserEmail, currentUserPassword);
+      if (isConnected || _imapService.isConnected) {
+        final fetched = await _imapService.fetchMessages(
+          folderPath: 'INBOX',
+          count: 20,
+        );
+        if (fetched.isNotEmpty) {
+          if (_knownEmailIds.isNotEmpty) {
+            final newMails = fetched.where((e) => !_knownEmailIds.contains(e.id) && !e.isRead).toList();
+            for (final m in newMails) {
+              _fcmService?.showIncomingEmailNotification(
+                from: m.from.name.isNotEmpty ? m.from.name : m.from.email,
+                subject: m.subject,
+                snippet: m.snippet,
+              );
+            }
+          }
+          _knownEmailIds.addAll(fetched.map((e) => e.id));
+
+          if (_currentFolder.type == FolderType.inbox) {
+            _emails = fetched;
+            _sortEmailsByDate();
+            _updateFolderCounts();
+            await _storageService.cacheEmails('INBOX', _emails, userEmail: currentUserEmail);
+            notifyListeners();
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _startPeriodicSyncTimer() {
+    _periodicSyncTimer?.cancel();
+    _periodicSyncTimer = Timer.periodic(const Duration(seconds: 45), (timer) {
+      if (_authProvider.isAuthenticated) {
+        syncNewEmailsInBackground();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _periodicSyncTimer?.cancel();
+    super.dispose();
   }
 }

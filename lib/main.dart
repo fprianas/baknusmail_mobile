@@ -133,6 +133,7 @@ void main() async {
             imapService,
             smtpService,
             ctx.read<AuthProvider>(),
+            ctx.read<FCMService>(),
           ),
           update: (ctx, auth, previous) {
             if (previous != null) {
@@ -141,7 +142,13 @@ void main() async {
               }
               return previous;
             }
-            return MailProvider(storageService, imapService, smtpService, auth);
+            return MailProvider(
+              storageService,
+              imapService,
+              smtpService,
+              auth,
+              ctx.read<FCMService>(),
+            );
           },
         ),
       ],
@@ -178,6 +185,9 @@ class _BaknusMailAppState extends State<BaknusMailApp> with WidgetsBindingObserv
       security.onAppPaused();
     } else if (state == AppLifecycleState.resumed) {
       security.onAppResumed();
+      try {
+        context.read<MailProvider>().syncNewEmailsInBackground();
+      } catch (_) {}
     }
   }
 

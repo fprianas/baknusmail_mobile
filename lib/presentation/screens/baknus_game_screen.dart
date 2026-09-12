@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme/app_colors.dart';
 import '../widgets/app_background.dart';
+import 'ssrace_game_screen.dart';
 
 class BaknusGameScreen extends StatefulWidget {
   const BaknusGameScreen({super.key});
@@ -15,11 +16,21 @@ class _BaknusGameScreenState extends State<BaknusGameScreen> {
   static const String _ssRaceUrl = 'https://ssrace.baknusgame.smkbn666.sch.id';
 
   Future<void> _launchGame(BuildContext context, {bool external = false}) async {
+    if (!external) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const SSRaceGameScreen(),
+        ),
+      );
+      return;
+    }
+
     final uri = Uri.parse(_ssRaceUrl);
     try {
       final launched = await launchUrl(
         uri,
-        mode: external ? LaunchMode.externalApplication : LaunchMode.inAppBrowserView,
+        mode: LaunchMode.externalApplication,
       );
       if (!launched) {
         await launchUrl(uri, mode: LaunchMode.platformDefault);
